@@ -1,0 +1,4 @@
+dependencies:
+  idf: ">=5.5.0"
+  # QSPI AMOLED driver (Apache-2.0); takes the CO5300's init commands as vendor config
+  espressif/esp_lcd_sh8601: "^1.0.0"

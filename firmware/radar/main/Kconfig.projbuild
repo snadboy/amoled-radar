@@ -1,0 +1,21 @@
+menu "Desk radar"
+    config RADAR_WIFI_SSID
+        string "WiFi SSID (2.4 GHz)"
+        default ""
+        help
+            Filled in by build.sh from RADAR_WIFI_SSID in the shareables .env.
+            Never commit a value here.
+    config RADAR_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+    config RADAR_SERVER_URL
+        string "Radar server base URL (LAN; the board can't use Tailscale)"
+        default "http://192.168.86.135:8098"
+    config RADAR_CITY
+        string "View shown at boot"
+        default "geneva"
+    config RADAR_BRIGHTNESS
+        int "Panel brightness (1-255). Kept low: AMOLED burn-in is superlinear in brightness."
+        range 1 255
+        default 140
+endmenu
