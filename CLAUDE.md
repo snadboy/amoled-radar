@@ -127,6 +127,19 @@ NWS observations are METAR-derived and report **whole degrees C**, so station te
 12 C / dewpoint 8 C on 2026-10-03, giving the same humidity to 12 decimal places -- looks
 like a caching bug, isn't). NWS wants a contact in the User-Agent.
 
+**KEY button behaviour (firmware), agreed 2026-10-03:**
+
+| Input | Screen on | Screen off |
+|---|---|---|
+| Short press (< 1 s) | open picker / next city | **wake the screen** (no picker) |
+| Hold >= 1 s | screen off (closes picker, no city change) | screen on |
+
+After 250 ms of holding, show a "Hold to turn off" pill with a bar filling to the 1 s mark,
+so releasing early still counts as a short press. Turn the panel off with the standard
+MIPI DCS display-off / sleep-in commands rather than cutting the AXP2101 rail, so it wakes
+instantly without re-initialising. **A manual off overrides occupancy blanking**: walking
+into the office must not wake a screen that was turned off by hand.
+
 **Picker behaviour (firmware):** KEY opens a list with the current city highlighted; each
 further KEY press moves the highlight; 3 s without a press picks the highlighted city;
 tapping a row on the touchscreen picks it immediately. Radar is paused and dimmed behind
