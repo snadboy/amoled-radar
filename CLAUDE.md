@@ -107,11 +107,11 @@ XiaoZhi config has CS and touch-INT swapped.
 | Button | Pin | Use |
 |---|---|---|
 | BOOT | **GPIO9** (XiaoZhi config) | download mode if held at power-on; XiaoZhi uses it as a runtime button, so it is a safe fallback |
-| KEY  | **unknown** — "can be used for custom functions" per Waveshare docs, pin unpublished | **opens the city picker** |
-| PWR  | AXP2101 PWRON (short press readable from the PMU IRQ registers over I2C) | power |
+| KEY  | **GPIO10**, active LOW (needs pull-up) -- found 2026-10-03 with `firmware/bringup-buttons` | **opens the city picker; hold = screen off/on** |
+| PWR  | AXP2101 PWRON: IRQ reg 0x49 (bit1 falling, bit0 rising, bit3 SHORT, bit2 LONG), **and GPIO18 goes HIGH while held** | power -- long press powers off |
 
-Find KEY's GPIO on bring-up (scan inputs while pressing). Which physical position on
-the enclosure is KEY is also unconfirmed.
+Enclosure top, left to right: **Boot, Power, Key** (labelled). Confirmed by pressing each
+while `bringup-buttons` logged GPIO 6/9/10/14/18 and the AXP2101 IRQ register.
 
 ## Cities and the picker
 
