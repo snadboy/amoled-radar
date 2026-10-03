@@ -98,7 +98,9 @@ GPIO0–30**, so that pin does not exist — it was an ESP32-S3 pinout. Always t
 
 Everything else agrees (QSPI CLK=0, D0-3=1-4, I2C SDA=8 SCL=7, touch RST=11, panel RST
 via AXP2101). One source has CS and touch-INT swapped. The wrong CS just gives a blank
-panel, so try GPIO5 first and swap if dark. Record the winner here.
+panel, so try GPIO5 first and swap if dark. **RESOLVED 2026-10-03: CS = GPIO5** (so touch INT = GPIO15). Waveshare's
+`09_LVGL_V9_Test`, built unmodified, lit the panel. The ESP-IDF examples are right; the
+XiaoZhi config has CS and touch-INT swapped.
 
 ### Buttons — the enclosure has three on top
 
