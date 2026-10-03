@@ -52,6 +52,18 @@ DEFAULT_CITIES = [
     {"id": "canton",  "name": "Canton",    "lat": 42.3087, "lon": -83.4822, "tz": "America/Detroit",
      "places": [["Detroit", 42.3314, -83.0458], ["Ann Arbor", 42.2808, -83.7430],
                 ["Pontiac", 42.6389, -83.2910], ["Monroe", 41.9164, -83.3977]]},
+    # The lower 48. lon_span fills the panel width; RainViewer zoom 3 at 512 px is
+    # ~7.8 km/px at this latitude, close to the ~9 km/px shown. No rings or
+    # crosshair. There is no national temperature, so the strip shows Geneva's
+    # reading and says so. A 4th element of 1 in a place marks one of your cities.
+    {"id": "us", "name": "Entire country", "lat": 37.5, "lon": -96.0, "tz": "America/Chicago",
+     "ha": True, "status_label": "Geneva", "national": True, "suppress_clear_air": True,
+     "lon_span": 61.0, "base_zoom": 5, "radar_zoom": 3, "radar_tile": 512,
+     "places": [["Geneva", 41.8875, -88.3054, 1], ["St. Louis", 38.6270, -90.1994, 1],
+                ["Canton", 42.3087, -83.4822, 1],
+                ["Seattle", 47.6062, -122.3321], ["Los Angeles", 34.0522, -118.2437],
+                ["Denver", 39.7392, -104.9903], ["Dallas", 32.7767, -96.7970],
+                ["Miami", 25.7617, -80.1918], ["New York", 40.7128, -74.0060]]},
 ]
 CITIES = json.loads(os.environ["RADAR_CITIES"]) if os.environ.get("RADAR_CITIES") else DEFAULT_CITIES
 BY_ID  = {c["id"]: c for c in CITIES}
@@ -72,19 +84,21 @@ def _jpeg(img):
 
 def build_radar(city, maps):
     lat, lon = city["lat"], city["lon"]
-    bm   = R.darken_for_amoled(R.basemap(lat, lon))
+    bm   = R.darken_for_amoled(R.basemap(lat, lon, city))
     OW, OH = R.PANEL + 2 * R.ORBIT_PX, R.VIEW_H + 2 * R.ORBIT_PX
-    base = R.decorate(bm.resize((OW, OH), R.Image.LANCZOS)).convert("RGB")
+    base = R.decorate(bm.resize((OW, OH), R.Image.LANCZOS), city).convert("RGB")
     ox, oy = R.orbit_offset(int(time.time() // RADAR_S))
 
     host = maps["host"]
     want = (maps["radar"]["past"] + maps["radar"].get("nowcast", []))[-N_FRAMES:]
     layers, stamps = [], []
     for f in want:
-        layer = R.radar(host, f["path"], lat, lon)
+        layer = R.radar(host, f["path"], lat, lon, city)
         if R.is_watermark(layer):
             raise RuntimeError("RainViewer returned a watermark tile at zoom %d "
-                               "-- the free tier caps at 7" % R.RADAR_ZOOM)
+                               "-- the free tier caps at 7" % city.get("radar_zoom", R.RADAR_ZOOM))
+        if city.get("suppress_clear_air"):
+            layer = R.suppress_clear_air(layer)      # before resampling blends colours
         layers.append(layer.resize((OW, OH), R.Image.LANCZOS)); stamps.append(f["time"])
 
     # interpolate the radar layer only, then composite every layer the same way
@@ -97,13 +111,13 @@ def build_radar(city, maps):
                 seq.append(tw)
                 times.append(stamps[i] + (stamps[i + 1] - stamps[i]) * (k + 1) / (n + 1.0))
 
-    pts = R.place_pixels(city.get("places", []), lat, lon, OW, OH)
+    pts = R.place_pixels(city.get("places", []), lat, lon, OW, OH, city)
     out = []
     t_first, t_last = times[0], times[-1]
     left, right = clock(t_first, city), clock(t_last, city)
     for layer, t in zip(seq, times):
         frame = base.copy(); frame.paste(layer, (0, 0), layer)
-        R.draw_places(frame, pts)
+        R.draw_places(frame, pts, crosshair=not city.get("national"))
         frame = frame.crop((R.ORBIT_PX + ox, R.ORBIT_PX + oy,
                             R.ORBIT_PX + ox + R.PANEL, R.ORBIT_PX + oy + R.VIEW_H))
         frac = (t - t_first) / float(t_last - t_first) if t_last > t_first else 1.0
@@ -112,7 +126,10 @@ def build_radar(city, maps):
 
 def build_status(city):
     temp, hum = R.ha_reading() if city.get("ha") else R.obs_reading(city["lat"], city["lon"])
-    return _jpeg(R.status_strip(temp, hum, clock(time.time(), city), city["name"]))
+    stamp = clock(time.time(), city)
+    if city.get("status_label"):          # whose reading this is, when it isn't the view's
+        stamp = "%s \u00b7 %s" % (city["status_label"], stamp)
+    return _jpeg(R.status_strip(temp, hum, stamp, city["name"]))
 
 def radar_loop():
     while True:

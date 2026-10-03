@@ -161,6 +161,23 @@ flips to the left of its dot if it would hit the centre crosshair, another label
 edge (Canton's "Ann Arbor" ran into the crosshair otherwise). Toledo was left out of Canton
 because it lands on the progress bar.
 
+**Entire country** (`id: us`): the lower 48 via `lon_span: 61` (fills the panel width)
+instead of `radius_mi`; basemap zoom 5, RainViewer zoom 3 at 512 px (~7.8 km/px, close to
+the ~9 km/px shown). No rings or crosshair. Places include your three cities flagged with a
+4th element `1` (amber markers) plus six large cities. No national temperature exists, so
+the strip shows Geneva's HA reading labelled "Geneva · time" (`status_label`).
+
+**Clear-air suppression** (national only, `suppress_clear_air`): RainViewer's lowest band
+is a ramp of semi-transparent tans/greys, ~rgba(117,112,98,52) to rgba(222,208,151,190) --
+43.6% of all national returns, mostly clear-air echo (insects/birds) ringing radar sites in
+the evening plus a halo round real storms. Filtered on the raw tile before resampling
+(after it, colours blend and the test fails). Kept on city views because whether the band
+also carries light snow is unverified.
+
+**Ring scale fixed:** rings were scaled from the oversized canvas, which includes the orbit
+bleed, so the "50 mi" ring was drawn ~4% large. Now divided out (verified: Chicago measures
+34 mi vs 35 true).
+
 ⚠️ `decorate()` runs on the oversized canvas, so anything drawn there must sit
 `2*ORBIT_PX` in from the edges -- the "50 mi" label was being clipped to "50 m" at some
 orbit positions until that was fixed.

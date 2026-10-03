@@ -41,14 +41,23 @@ def deg2px(lat, lon, z, tile=256):
     y = (1.0 - math.log(math.tan(lr) + 1 / math.cos(lr)) / math.pi) / 2.0 * n * tile
     return x, y
 
-def window(z, tile, lat=None, lon=None):
-    """Pixel box at (z, tile) for the same geographic window: the full 50-mile
-    radius fits the SHORT axis, so the radius is visible in every direction."""
-    span_m = RADIUS_MI * 2 * 1609.344
+def window(z, tile, lat=None, lon=None, view=None):
+    """Pixel box at (z, tile) for the view's geographic window.
+
+    Two modes, set per view:
+      * radius_mi (cities, default 50): the full radius fits the SHORT axis, so
+        it is visible in every direction.
+      * lon_span (national): the given span of longitude fills the panel WIDTH.
+    """
+    view = view or {}
     lat = LAT if lat is None else lat; lon = LON if lon is None else lon
-    m      = mpp(lat, z, tile)
-    half_h = span_m / m / 2.0
-    half_w = half_h * (PANEL / VIEW_H)
+    if view.get("lon_span"):
+        half_w = view["lon_span"] / 2.0 / 360.0 * (2 ** z) * tile
+        half_h = half_w * (VIEW_H / float(PANEL))
+    else:
+        span_m = view.get("radius_mi", RADIUS_MI) * 2 * 1609.344
+        half_h = span_m / mpp(lat, z, tile) / 2.0
+        half_w = half_h * (PANEL / VIEW_H)
     bleed  = (ORBIT_PX + 2) / float(VIEW_H) * (half_h * 2)   # keep the orbit in-bounds
     half_h += bleed; half_w += bleed
     cx, cy = deg2px(lat, lon, z, tile)
@@ -58,12 +67,12 @@ def fetch(url, timeout=25):
     return urllib.request.urlopen(
         urllib.request.Request(url, headers={"User-Agent": UA}), timeout=timeout).read()
 
-def mosaic(url_for, z, tile, cache_key=None, lat=None, lon=None):
+def mosaic(url_for, z, tile, cache_key=None, lat=None, lon=None, view=None):
     if cache_key:
         p = os.path.join(CACHE, cache_key)
         if os.path.exists(p):
             return Image.open(p).convert("RGBA")
-    x0, y0, x1, y1 = window(z, tile, lat, lon)
+    x0, y0, x1, y1 = window(z, tile, lat, lon, view)
     tx0, ty0, tx1, ty1 = int(x0//tile), int(y0//tile), int(x1//tile), int(y1//tile)
     canvas = Image.new("RGBA", ((tx1-tx0+1)*tile, (ty1-ty0+1)*tile), (0, 0, 0, 0))
     for tx in range(tx0, tx1+1):
@@ -106,29 +115,58 @@ def darken_for_amoled(img):
     r, g, b, a = img.split()
     return Image.merge("RGBA", (r.point(lut), g.point(lut), b.point(lut), a))
 
-def basemap(lat=None, lon=None):
+def basemap(lat=None, lon=None, view=None):
+    view = view or {}
     lat = LAT if lat is None else lat; lon = LON if lon is None else lon
+    z = view.get("base_zoom", BASE_ZOOM)
+    span = "s%g" % view["lon_span"] if view.get("lon_span") else "r%g" % view.get("radius_mi", RADIUS_MI)
     url = ("https://services.arcgisonline.com/ArcGIS/rest/services/"
            "Canvas/World_Dark_Gray_Base/MapServer/tile/%d/%d/%d")   # NOTE: z/y/x
     # The cache key MUST include the location. It used to be just "base_z9.png",
     # which every city would have silently shared.
-    return mosaic(lambda x, y: url % (BASE_ZOOM, y, x), BASE_ZOOM, 256,
-                  cache_key="base_z%d_%.4f_%.4f_o%d.png" % (BASE_ZOOM, lat, lon, ORBIT_PX),
-                  lat=lat, lon=lon)
+    return mosaic(lambda x, y: url % (z, y, x), z, 256,
+                  cache_key="base_z%d_%.4f_%.4f_%s_o%d.png" % (z, lat, lon, span, ORBIT_PX),
+                  lat=lat, lon=lon, view=view)
 
-def radar(host, path, lat=None, lon=None):
-    url = "%s%s/%d/%d/%%d/%%d/%d/1_1.png" % (host, path, RADAR_TILE, RADAR_ZOOM, PALETTE)
-    return mosaic(lambda x, y: url % (x, y), RADAR_ZOOM, RADAR_TILE, lat=lat, lon=lon)
+def radar(host, path, lat=None, lon=None, view=None):
+    view = view or {}
+    z, tile = view.get("radar_zoom", RADAR_ZOOM), view.get("radar_tile", RADAR_TILE)
+    url = "%s%s/%d/%d/%%d/%%d/%d/1_1.png" % (host, path, tile, z, PALETTE)
+    return mosaic(lambda x, y: url % (x, y), z, tile, lat=lat, lon=lon, view=view)
+
+def suppress_clear_air(img):
+    """Drop RainViewer's lowest band: semi-transparent tans and greys, from about
+    rgba(117,112,98,52) to rgba(222,208,151,190). Nationally that band was 43.6%
+    of all returns, mostly clear-air echo (insects, birds) ringing the radar sites
+    in the evening, plus a soft halo around real storms. Rain (blue, B > R) and
+    heavy returns (R - B > 140, opaque) are untouched.
+
+    Used on the national view only: whether this band also carries light snow is
+    unverified, so the city views keep it."""
+    import numpy as np
+    a = np.asarray(img.convert("RGBA")).copy()
+    r, g, b, al = (a[..., i].astype(np.int16) for i in range(4))
+    tan = (al < 200) & (r > b) & (r - b < 90) & (np.abs(r - g) < 25)
+    a[..., 3][tan] = 0
+    return Image.fromarray(a, "RGBA")
 
 def is_watermark(img):
     c = img.getcolors(maxcolors=1 << 20) or []
     d = {col: n for n, col in c}
     return d.get((0, 0, 0, 140), 0) > 2000 and d.get((255, 255, 255, 200), 0) > 200
 
-def decorate(img):
+def decorate(img, view=None):
+    view = view or {}
+    if view.get("national"):
+        return img          # rings and a crosshair mean nothing at national scale
     d = ImageDraw.Draw(img, "RGBA")
     cx, cy = img.width/2, img.height/2
-    px_per_mi = (img.height/2) / RADIUS_MI
+    # The oversized canvas also covers the orbit bleed, so its half-height is MORE
+    # than the radius. Scaling rings from img.height alone drew the "50 mi" ring
+    # ~4% too big (about 52 mi).
+    radius = view.get("radius_mi", RADIUS_MI)
+    bleed_frac = 2.0 * (ORBIT_PX + 2) / float(VIEW_H)
+    px_per_mi = (img.height / 2.0) / (radius * (1 + bleed_frac))
     for mi in (25, 50):
         r = mi*px_per_mi
         d.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(125, 145, 165, RING_ALPHA), width=2)
@@ -166,20 +204,22 @@ def status_strip(temp, hum, stamp, city=None):
         d.text((PANEL//2, y), stamp, font=fnt(17), fill=(115, 128, 142), anchor="mm")
     return img
 
-def place_pixels(places, lat, lon, ow, oh):
+def place_pixels(places, lat, lon, ow, oh, view=None):
     """Pixel position of each town on the OVERSIZED frame (ow x oh), which covers
     exactly window() at any zoom. Towns the orbit could push off-screen are dropped."""
-    x0, y0, x1, y1 = window(BASE_ZOOM, 256, lat, lon)
+    z = (view or {}).get("base_zoom", BASE_ZOOM)
+    x0, y0, x1, y1 = window(z, 256, lat, lon, view)
     out = []
-    for name, pla, plo in places:
-        px, py = deg2px(pla, plo, BASE_ZOOM, 256)
+    for place in places:
+        name, pla, plo = place[0], place[1], place[2]
+        px, py = deg2px(pla, plo, z, 256)
         x = (px - x0) / (x1 - x0) * ow; y = (py - y0) / (y1 - y0) * oh
         m = 2 * ORBIT_PX + 4
         if m < x < ow - m and m < y < oh - m:
-            out.append((name, x, y))
+            out.append((name, x, y, bool(place[3]) if len(place) > 3 else False))
     return out
 
-def draw_places(frame, pts):
+def draw_places(frame, pts, crosshair=True):
     """Town markers on TOP of the radar, so they stay readable in the storms where
     the context matters. Drawn before the orbit crop, so they drift with it.
 
@@ -189,18 +229,22 @@ def draw_places(frame, pts):
     d = ImageDraw.Draw(frame, "RGBA")
     f = fnt(14)
     cx, cy = frame.width / 2.0, frame.height / 2.0
-    keep_out = [(cx - 14, cy - 14, cx + 14, cy + 14)]          # the crosshair
+    keep_out = [(cx - 14, cy - 14, cx + 14, cy + 14)] if crosshair else []
+    keep_out += [(x - 5, y - 5, x + 5, y + 5) for _, x, y, _ in pts]   # every dot
     edge = 2 * ORBIT_PX + 4
     def hits(box):
         if box[0] < edge or box[2] > frame.width - edge: return True
         return any(not (box[2] < k[0] or box[0] > k[2] or box[3] < k[1] or box[1] > k[3]) for k in keep_out)
-    for name, x, y in pts:
+    for name, x, y, mine in pts:
         w = d.textlength(name, font=f)
         right = (x + 8, y - 9, x + 8 + w, y + 9)
         left  = (x - 8 - w, y - 9, x - 8, y + 9)
         box, anchor, tx = (right, "lm", x + 8) if not hits(right) or hits(left) else (left, "rm", x - 8)
         keep_out.append(box)
-        d.ellipse([x - 3.5, y - 3.5, x + 3.5, y + 3.5], fill=(225, 230, 238, 230), outline=(0, 0, 0, 255), width=1)
+        # your own cities (national view) get an amber marker so they stand out
+        dot = (240, 172, 30, 240) if mine else (225, 230, 238, 230)
+        r = 4.5 if mine else 3.5
+        d.ellipse([x - r, y - r, x + r, y + r], fill=dot, outline=(0, 0, 0, 255), width=1)
         d.text((tx, y), name, font=f, fill=(214, 220, 228, 225), anchor=anchor,
                stroke_width=2, stroke_fill=(0, 0, 0, 255))
     return frame
