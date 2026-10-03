@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""HTTP service feeding the ESP32-C6 AMOLED radar display.
+"""HTTP service feeding the ESP32-C6 AMOLED radar display, for several cities.
 
 Two independent refresh loops, because they have very different natural rates:
 
-  * radar  -- every RADAR_REFRESH_S (default 600s, matching RainViewer's cadence)
-  * status -- every STATUS_REFRESH_S (default 60s), so the outdoor temperature is
-              never up to 10 minutes stale. This is the whole reason the status
-              strip is served separately instead of being burned into each frame.
+  * radar  -- every RADAR_REFRESH_S (600s, RainViewer's cadence). One RainViewer
+              index fetch per cycle, then one loop per city.
+  * status -- every STATUS_REFRESH_S (60s), so the temperature is never up to ten
+              minutes stale. This is why the strip is served apart from the frames.
 
-Everything is held in memory; nothing touches disk except the one-time basemap
-cache. The device fetches /manifest.json, notices loop_id changed, pulls the
-frames into its 16MB flash, and animates locally.
+The device asks /cities.json once, shows the list when the KEY button is pressed,
+and for the chosen city polls /c/<id>/manifest.json. When loop_id changes it pulls
+the frames into flash and animates locally -- no per-frame WiFi. It can cache every
+city's loop, so switching cities is instant.
+
+Endpoints
+  /cities.json                 [{id, name, lat, lon, default}]
+  /c/<id>/manifest.json        loop_id, frame count, sizes, times, keys (real frames)
+  /c/<id>/frame/<n>.jpg        480x424 radar frame
+  /c/<id>/status.jpg           480x56 temperature / humidity / city strip
+  /healthz
 """
 import io, json, os, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,29 +34,39 @@ QUALITY    = int(os.environ.get("RADAR_JPEG_QUALITY", "86"))
 # manifest lists which frames are real ("keys"), so firmware that measures its
 # own decode rate as too slow can play real frames only.
 TWEENS     = int(os.environ.get("RADAR_TWEENS", "3"))
-TWEEN_MODE = os.environ.get("RADAR_TWEEN_MODE", "motion")   # or "blend"
+TWEEN_MODE = os.environ.get("RADAR_TWEEN_MODE", "motion")
 
-_lock   = threading.Lock()
-_state  = {"loop_id": 0, "frames": [], "status": b"", "built": 0, "status_built": 0,
-           "radar_err": None, "status_err": None}
+# City centres are public, so they can live in the repo. "ha": true means the
+# temperature comes from the Home Assistant outdoor sensors instead of the
+# nearest NWS station.
+DEFAULT_CITIES = [
+    {"id": "geneva",  "name": "Geneva",    "lat": 41.8875, "lon": -88.3054, "ha": True, "default": True},
+    {"id": "stlouis", "name": "St. Louis", "lat": 38.6270, "lon": -90.1994},
+    {"id": "canton",  "name": "Canton",    "lat": 42.3087, "lon": -83.4822},
+]
+CITIES = json.loads(os.environ["RADAR_CITIES"]) if os.environ.get("RADAR_CITIES") else DEFAULT_CITIES
+BY_ID  = {c["id"]: c for c in CITIES}
+
+_lock  = threading.Lock()
+_state = {c["id"]: {"loop_id": 0, "frames": [], "times": [], "keys": [], "status": b"",
+                    "built": 0, "status_built": 0, "radar_err": None, "status_err": None}
+          for c in CITIES}
 
 def _jpeg(img):
     b = io.BytesIO(); img.save(b, "JPEG", quality=QUALITY, optimize=True); return b.getvalue()
 
-def build_radar():
-    """Render the loop as radar-only frames (no status strip burned in)."""
-    bm   = R.darken_for_amoled(R.basemap())
-    OW, OH = R.PANEL + 2*R.ORBIT_PX, R.VIEW_H + 2*R.ORBIT_PX
+def build_radar(city, maps):
+    lat, lon = city["lat"], city["lon"]
+    bm   = R.darken_for_amoled(R.basemap(lat, lon))
+    OW, OH = R.PANEL + 2 * R.ORBIT_PX, R.VIEW_H + 2 * R.ORBIT_PX
     base = R.decorate(bm.resize((OW, OH), R.Image.LANCZOS)).convert("RGB")
     ox, oy = R.orbit_offset(int(time.time() // RADAR_S))
 
-    maps = json.loads(R.fetch("https://api.rainviewer.com/public/weather-maps.json"))
     host = maps["host"]
     want = (maps["radar"]["past"] + maps["radar"].get("nowcast", []))[-N_FRAMES:]
-
     layers, stamps = [], []
     for f in want:
-        layer = R.radar(host, f["path"])
+        layer = R.radar(host, f["path"], lat, lon)
         if R.is_watermark(layer):
             raise RuntimeError("RainViewer returned a watermark tile at zoom %d "
                                "-- the free tier caps at 7" % R.RADAR_ZOOM)
@@ -70,30 +88,54 @@ def build_radar():
         frame = frame.crop((R.ORBIT_PX + ox, R.ORBIT_PX + oy,
                             R.ORBIT_PX + ox + R.PANEL, R.ORBIT_PX + oy + R.VIEW_H))
         out.append(_jpeg(frame))
-    return out, {"times": [int(t) for t in times], "keys": keys}
+    return out, [int(t) for t in times], keys
 
-def build_status():
-    temp, hum = R.ha_reading()
-    return _jpeg(R.status_strip(temp, hum, time.strftime("%-I:%M %p")))
+def build_status(city):
+    temp, hum = R.ha_reading() if city.get("ha") else R.obs_reading(city["lat"], city["lon"])
+    return _jpeg(R.status_strip(temp, hum, time.strftime("%-I:%M %p"), city["name"]))
 
-def _loop(name, fn, period, apply_fn):
+def radar_loop():
     while True:
         try:
-            v = fn()
-            with _lock: apply_fn(v)
-            print("[%s] ok" % name, flush=True)
+            maps = json.loads(R.fetch("https://api.rainviewer.com/public/weather-maps.json"))
         except Exception as e:
-            with _lock: _state["%s_err" % name] = str(e)[:200]
-            print("[%s] FAILED: %s" % (name, e), flush=True)
-        time.sleep(period)
+            maps = None
+            print("[radar] RainViewer index FAILED: %s" % e, flush=True)
+        for c in CITIES:
+            if maps is None:
+                with _lock: _state[c["id"]]["radar_err"] = "RainViewer index unavailable"
+                continue
+            try:
+                frames, times, keys = build_radar(c, maps)
+                with _lock:
+                    _state[c["id"]].update(loop_id=int(time.time()), frames=frames, times=times,
+                                           keys=keys, built=int(time.time()), radar_err=None)
+                print("[radar] %s ok (%d frames)" % (c["id"], len(frames)), flush=True)
+            except Exception as e:
+                with _lock: _state[c["id"]]["radar_err"] = str(e)[:200]
+                print("[radar] %s FAILED: %s" % (c["id"], e), flush=True)
+        time.sleep(RADAR_S)
 
-def _apply_radar(v):
-    frames, meta = v
-    _state.update(loop_id=int(time.time()), frames=frames, times=meta["times"],
-                  keys=meta["keys"], built=int(time.time()), radar_err=None)
+def status_loop():
+    while True:
+        for c in CITIES:
+            try:
+                v = build_status(c)
+                with _lock: _state[c["id"]].update(status=v, status_built=int(time.time()), status_err=None)
+            except Exception as e:
+                with _lock: _state[c["id"]]["status_err"] = str(e)[:200]
+                print("[status] %s FAILED: %s" % (c["id"], e), flush=True)
+        time.sleep(STATUS_S)
 
-def _apply_status(v):
-    _state.update(status=v, status_built=int(time.time()), status_err=None)
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    def handle_error(self, request, client_address):
+        # a client hanging up mid-response (health checks, a device losing WiFi)
+        # is routine -- don't dump a traceback into the container log for it
+        import sys
+        if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -105,40 +147,47 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+    def _json(self, obj, code=200):
+        self._send(json.dumps(obj).encode(), code=code)
+
     def do_GET(self):
-        p = self.path.split("?")[0]
-        with _lock: st = dict(_state)
-        if p in ("/manifest.json", "/"):
-            return self._send(json.dumps({
-                "loop_id": st["loop_id"], "frames": len(st["frames"]),
-                "w": R.PANEL, "h": R.PANEL, "view_h": R.VIEW_H, "status_h": R.STATUS_H,
-                "built": st["built"], "status_built": st["status_built"],
-                "sizes": [len(f) for f in st["frames"]],
-                "times": st.get("times", []),
-                "keys": st.get("keys", []),
-                "tweens_per_10min": TWEENS, "tween_mode": TWEEN_MODE,
-                "radar_err": st["radar_err"], "status_err": st["status_err"],
-            }).encode())
-        if p == "/status.jpg":
-            if not st["status"]: return self._send(b'{"error":"not ready"}', code=503)
-            return self._send(st["status"], "image/jpeg")
-        if p.startswith("/frame/") and p.endswith(".jpg"):
-            try: i = int(p[len("/frame/"):-4])
-            except ValueError: return self._send(b'{"error":"bad index"}', code=400)
-            if not (0 <= i < len(st["frames"])):
-                return self._send(b'{"error":"out of range"}', code=404)
-            return self._send(st["frames"][i], "image/jpeg")
+        p = self.path.split("?")[0].rstrip("/") or "/"
+        if p in ("/", "/cities.json"):
+            return self._json([dict({k: c[k] for k in ("id", "name", "lat", "lon")},
+                                    default=bool(c.get("default"))) for c in CITIES])
         if p == "/healthz":
-            ok = bool(st["frames"]) and bool(st["status"])
-            return self._send(json.dumps({"ok": ok, "frames": len(st["frames"]),
-                                          "radar_err": st["radar_err"],
-                                          "status_err": st["status_err"]}).encode(),
-                              code=200 if ok else 503)
-        self._send(b'{"error":"not found"}', code=404)
+            with _lock:
+                per = {cid: {"frames": len(st["frames"]), "status": bool(st["status"]),
+                             "radar_err": st["radar_err"], "status_err": st["status_err"]}
+                       for cid, st in _state.items()}
+            ok = all(v["frames"] and v["status"] for v in per.values())
+            return self._json({"ok": ok, "cities": per}, 200 if ok else 503)
+
+        parts = p.split("/")          # ['', 'c', '<id>', ...]
+        if len(parts) >= 4 and parts[1] == "c" and parts[2] in BY_ID:
+            with _lock: st = dict(_state[parts[2]])
+            rest = "/".join(parts[3:])
+            if rest == "manifest.json":
+                return self._json({
+                    "city": parts[2], "loop_id": st["loop_id"], "frames": len(st["frames"]),
+                    "w": R.PANEL, "h": R.PANEL, "view_h": R.VIEW_H, "status_h": R.STATUS_H,
+                    "built": st["built"], "status_built": st["status_built"],
+                    "sizes": [len(f) for f in st["frames"]], "times": st["times"], "keys": st["keys"],
+                    "tweens_per_10min": TWEENS, "tween_mode": TWEEN_MODE,
+                    "radar_err": st["radar_err"], "status_err": st["status_err"]})
+            if rest == "status.jpg":
+                if not st["status"]: return self._json({"error": "not ready"}, 503)
+                return self._send(st["status"], "image/jpeg")
+            if rest.startswith("frame/") and rest.endswith(".jpg"):
+                try: i = int(rest[len("frame/"):-4])
+                except ValueError: return self._json({"error": "bad index"}, 400)
+                if not (0 <= i < len(st["frames"])): return self._json({"error": "out of range"}, 404)
+                return self._send(st["frames"][i], "image/jpeg")
+        self._json({"error": "not found"}, 404)
 
 if __name__ == "__main__":
-    threading.Thread(target=_loop, args=("radar", build_radar, RADAR_S, _apply_radar), daemon=True).start()
-    threading.Thread(target=_loop, args=("status", build_status, STATUS_S, _apply_status), daemon=True).start()
-    print("serving on :%d  (radar every %ds, status every %ds, %d frames)"
-          % (PORT, RADAR_S, STATUS_S, N_FRAMES), flush=True)
-    ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
+    threading.Thread(target=radar_loop, daemon=True).start()
+    threading.Thread(target=status_loop, daemon=True).start()
+    print("serving on :%d  cities=%s  (radar every %ds, status every %ds)"
+          % (PORT, ",".join(c["id"] for c in CITIES), RADAR_S, STATUS_S), flush=True)
+    Server(("0.0.0.0", PORT), H).serve_forever()

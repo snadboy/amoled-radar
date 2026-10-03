@@ -89,6 +89,51 @@ GPIO0–30**, so that pin does not exist — it was an ESP32-S3 pinout. Always t
 
 ---
 
+### ⚠️ Pin conflict between Waveshare's own sources — resolve on bring-up
+
+| | ESP-IDF examples (`user_config.h`) | XiaoZhi firmware (`boards/waveshare/esp32-c6-touch-amoled-2.16/config.h`) |
+|---|---|---|
+| Panel CS  | **GPIO5**  | **GPIO15** |
+| Touch INT | **GPIO15** | **GPIO5**  |
+
+Everything else agrees (QSPI CLK=0, D0-3=1-4, I2C SDA=8 SCL=7, touch RST=11, panel RST
+via AXP2101). One source has CS and touch-INT swapped. The wrong CS just gives a blank
+panel, so try GPIO5 first and swap if dark. Record the winner here.
+
+### Buttons — the enclosure has three on top
+
+| Button | Pin | Use |
+|---|---|---|
+| BOOT | **GPIO9** (XiaoZhi config) | download mode if held at power-on; XiaoZhi uses it as a runtime button, so it is a safe fallback |
+| KEY  | **unknown** — "can be used for custom functions" per Waveshare docs, pin unpublished | **opens the city picker** |
+| PWR  | AXP2101 PWRON (short press readable from the PMU IRQ registers over I2C) | power |
+
+Find KEY's GPIO on bring-up (scan inputs while pressing). Which physical position on
+the enclosure is KEY is also unconfirmed.
+
+## Cities and the picker
+
+Three views, defined in `serve.py` (`DEFAULT_CITIES`; override with `RADAR_CITIES` JSON).
+City centres are public coordinates, so no home position is stored anywhere.
+
+| id | City | Centre | Temp/humidity source |
+|---|---|---|---|
+| `geneva`  | Geneva, IL    | 41.8875, -88.3054 | **HA** `sensor.outdoor_temperature` / `_humidity` (the owner's own sensor) |
+| `stlouis` | St. Louis, MO | 38.6270, -90.1994 | NWS nearest station (**KCPS** Downtown Airport), Open-Meteo fallback |
+| `canton`  | Canton, MI    | 42.3087, -83.4822 | NWS nearest station (**KYIP** Willow Run), Open-Meteo fallback |
+
+NWS observations are METAR-derived and report **whole degrees C**, so station temps step in
+~2 F increments, and two stations can report identical values (KCPS and KYIP both read
+12 C / dewpoint 8 C on 2026-10-03, giving the same humidity to 12 decimal places -- looks
+like a caching bug, isn't). NWS wants a contact in the User-Agent.
+
+**Picker behaviour (firmware):** KEY opens a list with the current city highlighted; each
+further KEY press moves the highlight; 3 s without a press picks the highlighted city;
+tapping a row on the touchscreen picks it immediately. Radar is paused and dimmed behind
+it. All three loops (~1-2.5 MB each) fit in flash together, so switching is instant.
+
+The status strip now carries the city name (centre, above the time).
+
 ## Data sources — and their real limits
 
 ### RainViewer (radar) — free, no key
@@ -146,6 +191,12 @@ Env: `RADAR_LAT`/`RADAR_LON` (centre), `RADAR_FRAMES`, `RADAR_OUT`, `RADAR_CACHE
 `RADAR_TEMP_ENTITY`/`RADAR_HUM_ENTITY`, `RADAR_DARK_GAMMA`/`RADAR_DARK_SCALE`.
 
 Output: ~24–45 KB JPEG per 480×480 frame (bigger when there's heavy precipitation).
+
+Endpoints are per city: `/cities.json`, `/c/<id>/manifest.json`, `/c/<id>/frame/<n>.jpg`,
+`/c/<id>/status.jpg`, `/healthz`.
+
+⚠️ The basemap cache key includes the location (`base_z9_<lat>_<lon>_o<orbit>.png`). It was
+once plain `base_z9.png`, which every city would have silently shared.
 
 **Intended home:** `bedrock` (11 containers, load 0.03, 4.2/16 GB) as a dockhand stack.
 

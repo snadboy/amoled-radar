@@ -41,28 +41,29 @@ def deg2px(lat, lon, z, tile=256):
     y = (1.0 - math.log(math.tan(lr) + 1 / math.cos(lr)) / math.pi) / 2.0 * n * tile
     return x, y
 
-def window(z, tile):
+def window(z, tile, lat=None, lon=None):
     """Pixel box at (z, tile) for the same geographic window: the full 50-mile
     radius fits the SHORT axis, so the radius is visible in every direction."""
     span_m = RADIUS_MI * 2 * 1609.344
-    m      = mpp(LAT, z, tile)
+    lat = LAT if lat is None else lat; lon = LON if lon is None else lon
+    m      = mpp(lat, z, tile)
     half_h = span_m / m / 2.0
     half_w = half_h * (PANEL / VIEW_H)
     bleed  = (ORBIT_PX + 2) / float(VIEW_H) * (half_h * 2)   # keep the orbit in-bounds
     half_h += bleed; half_w += bleed
-    cx, cy = deg2px(LAT, LON, z, tile)
+    cx, cy = deg2px(lat, lon, z, tile)
     return cx - half_w, cy - half_h, cx + half_w, cy + half_h
 
 def fetch(url, timeout=25):
     return urllib.request.urlopen(
         urllib.request.Request(url, headers={"User-Agent": UA}), timeout=timeout).read()
 
-def mosaic(url_for, z, tile, cache_key=None):
+def mosaic(url_for, z, tile, cache_key=None, lat=None, lon=None):
     if cache_key:
         p = os.path.join(CACHE, cache_key)
         if os.path.exists(p):
             return Image.open(p).convert("RGBA")
-    x0, y0, x1, y1 = window(z, tile)
+    x0, y0, x1, y1 = window(z, tile, lat, lon)
     tx0, ty0, tx1, ty1 = int(x0//tile), int(y0//tile), int(x1//tile), int(y1//tile)
     canvas = Image.new("RGBA", ((tx1-tx0+1)*tile, (ty1-ty0+1)*tile), (0, 0, 0, 0))
     for tx in range(tx0, tx1+1):
@@ -105,15 +106,19 @@ def darken_for_amoled(img):
     r, g, b, a = img.split()
     return Image.merge("RGBA", (r.point(lut), g.point(lut), b.point(lut), a))
 
-def basemap():
+def basemap(lat=None, lon=None):
+    lat = LAT if lat is None else lat; lon = LON if lon is None else lon
     url = ("https://services.arcgisonline.com/ArcGIS/rest/services/"
            "Canvas/World_Dark_Gray_Base/MapServer/tile/%d/%d/%d")   # NOTE: z/y/x
+    # The cache key MUST include the location. It used to be just "base_z9.png",
+    # which every city would have silently shared.
     return mosaic(lambda x, y: url % (BASE_ZOOM, y, x), BASE_ZOOM, 256,
-                  cache_key="base_z%d.png" % BASE_ZOOM)
+                  cache_key="base_z%d_%.4f_%.4f_o%d.png" % (BASE_ZOOM, lat, lon, ORBIT_PX),
+                  lat=lat, lon=lon)
 
-def radar(host, path):
+def radar(host, path, lat=None, lon=None):
     url = "%s%s/%d/%d/%%d/%%d/%d/1_1.png" % (host, path, RADAR_TILE, RADAR_ZOOM, PALETTE)
-    return mosaic(lambda x, y: url % (x, y), RADAR_ZOOM, RADAR_TILE)
+    return mosaic(lambda x, y: url % (x, y), RADAR_ZOOM, RADAR_TILE, lat=lat, lon=lon)
 
 def is_watermark(img):
     c = img.getcolors(maxcolors=1 << 20) or []
@@ -141,7 +146,7 @@ def fnt(sz, bold=False):
         except Exception: _fc[k] = ImageFont.load_default()
     return _fc[k]
 
-def status_strip(temp, hum, stamp):
+def status_strip(temp, hum, stamp, city=None):
     img = Image.new("RGB", (PANEL, STATUS_H), (0, 0, 0)); d = ImageDraw.Draw(img)
     d.line([0, 0, PANEL, 0], fill=(40, 46, 54), width=1)
     y = STATUS_H//2 + 1
@@ -151,8 +156,42 @@ def status_strip(temp, hum, stamp):
     d.text((PANEL-16, y+3), "%", font=fnt(20), fill=(145, 156, 168), anchor="rm")
     pw = d.textlength("%", font=fnt(20))
     d.text((PANEL-16-pw-5, y), hum, font=fnt(36, True), fill=(255, 255, 255), anchor="rm")
-    d.text((PANEL//2, y), stamp, font=fnt(17), fill=(115, 128, 142), anchor="mm")
+    if city:
+        d.text((PANEL//2, y - 9), city, font=fnt(17, True), fill=(196, 204, 214), anchor="mm")
+        d.text((PANEL//2, y + 11), stamp, font=fnt(13), fill=(115, 128, 142), anchor="mm")
+    else:
+        d.text((PANEL//2, y), stamp, font=fnt(17), fill=(115, 128, 142), anchor="mm")
     return img
+
+_station_cache = {}
+
+def obs_reading(lat, lon):
+    """Latest REAL observation from the nearest NWS station (free, no key; NWS asks
+    for a contact in the User-Agent). Falls back to Open-Meteo's model value if the
+    station is down or reports null, which NWS stations occasionally do."""
+    hdr = {"User-Agent": "snadboy-homelab-radar/1.0 (dschless@gmail.com)",
+           "Accept": "application/geo+json"}
+    def get(u, h=hdr):
+        return json.loads(urllib.request.urlopen(urllib.request.Request(u, headers=h), timeout=15).read())
+    try:
+        key = (round(lat, 3), round(lon, 3))
+        if key not in _station_cache:
+            pt = get("https://api.weather.gov/points/%.4f,%.4f" % (lat, lon))
+            _station_cache[key] = get(pt["properties"]["observationStations"])["features"][0]["properties"]["stationIdentifier"]
+        ob = get("https://api.weather.gov/stations/%s/observations/latest" % _station_cache[key])["properties"]
+        tc, rh = ob["temperature"]["value"], ob["relativeHumidity"]["value"]
+        if tc is not None and rh is not None:
+            return str(int(round(tc * 9 / 5 + 32))), str(int(round(rh)))
+    except Exception as e:
+        print("    NWS %.3f,%.3f unavailable (%s)" % (lat, lon, str(e)[:40]))
+    try:
+        cur = get("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
+                  "&current=temperature_2m,relative_humidity_2m&temperature_unit=fahrenheit"
+                  % (lat, lon), {"User-Agent": UA})["current"]
+        return str(int(round(cur["temperature_2m"]))), str(int(round(cur["relative_humidity_2m"])))
+    except Exception as e:
+        print("    Open-Meteo %.3f,%.3f unavailable (%s)" % (lat, lon, str(e)[:40]))
+        return "--", "--"
 
 def ha_reading():
     """Live outdoor temp/humidity from Home Assistant. The TSR and garage FP300s
