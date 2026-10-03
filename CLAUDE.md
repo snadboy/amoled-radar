@@ -171,8 +171,18 @@ the strip shows Geneva's HA reading labelled "Geneva · time" (`status_label`).
 is a ramp of semi-transparent tans/greys, ~rgba(117,112,98,52) to rgba(222,208,151,190) --
 43.6% of all national returns, mostly clear-air echo (insects/birds) ringing radar sites in
 the evening plus a halo round real storms. Filtered on the raw tile before resampling
-(after it, colours blend and the test fails). Kept on city views because whether the band
-also carries light snow is unverified.
+(after it, colours blend and the test fails).
+
+On **city views** it is **temperature-gated** (`RADAR_CLEAR_AIR_MIN_F`, default 40): filtered
+when that city's own current reading is >= 40 F, kept when colder. Whether RainViewer's
+faint band also carries light snow is unverified, and snow can't reach the ground at 40 F,
+so this hides clear-air echo for most of the year without risking hiding snow in winter.
+No reading -> keep the band. The manifest reports `clear_air_filtered`.
+
+Found because St. Louis showed a tan field ringing the KLSX radar over ~1/3 of the view
+at 27% humidity: 62,403 tan pixels before, 29 after. A light-blue patch remained -- that
+is in the rain band and can't be filtered without hiding real light rain (at that humidity
+it is likely virga or October bird migration).
 
 **Ring scale fixed:** rings were scaled from the oversized canvas, which includes the orbit
 bleed, so the "50 mi" ring was drawn ~4% large. Now divided out (verified: Chicago measures

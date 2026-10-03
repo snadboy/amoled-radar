@@ -37,6 +37,10 @@ QUALITY    = int(os.environ.get("RADAR_JPEG_QUALITY", "86"))
 # own decode rate as too slow can play real frames only.
 TWEENS     = int(os.environ.get("RADAR_TWEENS", "3"))
 TWEEN_MODE = os.environ.get("RADAR_TWEEN_MODE", "motion")
+# Clear-air echo (RainViewer's faint tan/grey band) is filtered on city views only
+# when the city is at least this warm. Snow can't reach the ground at 40 F, so the
+# band can't be snow then; below it, the band is kept in case it is light snow.
+CLEAR_AIR_MIN_F = float(os.environ.get("RADAR_CLEAR_AIR_MIN_F", "40"))
 
 # City centres are public, so they can live in the repo. "ha": true means the
 # temperature comes from the Home Assistant outdoor sensors instead of the
@@ -82,8 +86,22 @@ def clock(epoch, city):
 def _jpeg(img):
     b = io.BytesIO(); img.save(b, "JPEG", quality=QUALITY, optimize=True); return b.getvalue()
 
+def reading(city):
+    return R.ha_reading() if city.get("ha") else R.obs_reading(city["lat"], city["lon"])
+
+def clear_air_filter_on(city):
+    """Always on for views that ask for it (national); otherwise on only when the
+    city's own current temperature rules out snow."""
+    if city.get("suppress_clear_air"):
+        return True
+    try:
+        return float(reading(city)[0]) >= CLEAR_AIR_MIN_F
+    except (TypeError, ValueError):
+        return False            # no reading: keep the band rather than risk hiding snow
+
 def build_radar(city, maps):
     lat, lon = city["lat"], city["lon"]
+    suppress = clear_air_filter_on(city)
     bm   = R.darken_for_amoled(R.basemap(lat, lon, city))
     OW, OH = R.PANEL + 2 * R.ORBIT_PX, R.VIEW_H + 2 * R.ORBIT_PX
     base = R.decorate(bm.resize((OW, OH), R.Image.LANCZOS), city).convert("RGB")
@@ -97,7 +115,7 @@ def build_radar(city, maps):
         if R.is_watermark(layer):
             raise RuntimeError("RainViewer returned a watermark tile at zoom %d "
                                "-- the free tier caps at 7" % city.get("radar_zoom", R.RADAR_ZOOM))
-        if city.get("suppress_clear_air"):
+        if suppress:
             layer = R.suppress_clear_air(layer)      # before resampling blends colours
         layers.append(layer.resize((OW, OH), R.Image.LANCZOS)); stamps.append(f["time"])
 
@@ -122,10 +140,10 @@ def build_radar(city, maps):
                             R.ORBIT_PX + ox + R.PANEL, R.ORBIT_PX + oy + R.VIEW_H))
         frac = (t - t_first) / float(t_last - t_first) if t_last > t_first else 1.0
         out.append(_jpeg(R.progress_bar(frame, frac, left, right, ox, oy)))
-    return out, [int(t) for t in times], keys
+    return out, [int(t) for t in times], keys, suppress
 
 def build_status(city):
-    temp, hum = R.ha_reading() if city.get("ha") else R.obs_reading(city["lat"], city["lon"])
+    temp, hum = reading(city)
     stamp = clock(time.time(), city)
     if city.get("status_label"):          # whose reading this is, when it isn't the view's
         stamp = "%s \u00b7 %s" % (city["status_label"], stamp)
@@ -143,10 +161,11 @@ def radar_loop():
                 with _lock: _state[c["id"]]["radar_err"] = "RainViewer index unavailable"
                 continue
             try:
-                frames, times, keys = build_radar(c, maps)
+                frames, times, keys, suppressed = build_radar(c, maps)
                 with _lock:
                     _state[c["id"]].update(loop_id=int(time.time()), frames=frames, times=times,
-                                           keys=keys, built=int(time.time()), radar_err=None)
+                                           keys=keys, clear_air_filtered=suppressed,
+                                           built=int(time.time()), radar_err=None)
                 print("[radar] %s ok (%d frames)" % (c["id"], len(frames)), flush=True)
             except Exception as e:
                 with _lock: _state[c["id"]]["radar_err"] = str(e)[:200]
@@ -211,6 +230,7 @@ class H(BaseHTTPRequestHandler):
                     "built": st["built"], "status_built": st["status_built"],
                     "sizes": [len(f) for f in st["frames"]], "times": st["times"], "keys": st["keys"],
                     "tweens_per_10min": TWEENS, "tween_mode": TWEEN_MODE,
+                    "clear_air_filtered": st.get("clear_air_filtered"),
                     "radar_err": st["radar_err"], "status_err": st["status_err"]})
             if rest == "status.jpg":
                 if not st["status"]: return self._json({"error": "not ready"}, 503)
