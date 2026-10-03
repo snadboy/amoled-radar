@@ -21,6 +21,8 @@ Endpoints
   /healthz
 """
 import io, json, os, threading, time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import render as R   # the renderer, used as a library
@@ -40,9 +42,16 @@ TWEEN_MODE = os.environ.get("RADAR_TWEEN_MODE", "motion")
 # temperature comes from the Home Assistant outdoor sensors instead of the
 # nearest NWS station.
 DEFAULT_CITIES = [
-    {"id": "geneva",  "name": "Geneva",    "lat": 41.8875, "lon": -88.3054, "ha": True, "default": True},
-    {"id": "stlouis", "name": "St. Louis", "lat": 38.6270, "lon": -90.1994},
-    {"id": "canton",  "name": "Canton",    "lat": 42.3087, "lon": -83.4822},
+    {"id": "geneva",  "name": "Geneva",    "lat": 41.8875, "lon": -88.3054, "tz": "America/Chicago", "ha": True, "default": True,
+     "places": [["Chicago", 41.8781, -87.6298], ["Rockford", 42.2711, -89.0940],
+                ["Joliet", 41.5250, -88.0817], ["DeKalb", 41.9295, -88.7504]]},
+    {"id": "stlouis", "name": "St. Louis", "lat": 38.6270, "lon": -90.1994, "tz": "America/Chicago",
+     "places": [["St. Charles", 38.7881, -90.4974], ["Alton", 38.8906, -90.1843],
+                ["Belleville", 38.5201, -89.9840], ["Festus", 38.2206, -90.3960]]},
+    # Toledo is the obvious "south" town for Canton but lands on the progress bar
+    {"id": "canton",  "name": "Canton",    "lat": 42.3087, "lon": -83.4822, "tz": "America/Detroit",
+     "places": [["Detroit", 42.3314, -83.0458], ["Ann Arbor", 42.2808, -83.7430],
+                ["Pontiac", 42.6389, -83.2910], ["Monroe", 41.9164, -83.3977]]},
 ]
 CITIES = json.loads(os.environ["RADAR_CITIES"]) if os.environ.get("RADAR_CITIES") else DEFAULT_CITIES
 BY_ID  = {c["id"]: c for c in CITIES}
@@ -51,6 +60,12 @@ _lock  = threading.Lock()
 _state = {c["id"]: {"loop_id": 0, "frames": [], "times": [], "keys": [], "status": b"",
                     "built": 0, "status_built": 0, "radar_err": None, "status_err": None}
           for c in CITIES}
+
+def clock(epoch, city):
+    """Local clock time for the city being shown. The container runs on UTC, so
+    time.strftime() printed UTC -- Canton read 3:00 PM at 11:00 AM local."""
+    tz = ZoneInfo(city.get("tz", "America/Chicago"))
+    return datetime.fromtimestamp(epoch, tz).strftime("%-I:%M %p")
 
 def _jpeg(img):
     b = io.BytesIO(); img.save(b, "JPEG", quality=QUALITY, optimize=True); return b.getvalue()
@@ -82,17 +97,22 @@ def build_radar(city, maps):
                 seq.append(tw)
                 times.append(stamps[i] + (stamps[i + 1] - stamps[i]) * (k + 1) / (n + 1.0))
 
+    pts = R.place_pixels(city.get("places", []), lat, lon, OW, OH)
     out = []
-    for layer in seq:
+    t_first, t_last = times[0], times[-1]
+    left, right = clock(t_first, city), clock(t_last, city)
+    for layer, t in zip(seq, times):
         frame = base.copy(); frame.paste(layer, (0, 0), layer)
+        R.draw_places(frame, pts)
         frame = frame.crop((R.ORBIT_PX + ox, R.ORBIT_PX + oy,
                             R.ORBIT_PX + ox + R.PANEL, R.ORBIT_PX + oy + R.VIEW_H))
-        out.append(_jpeg(frame))
+        frac = (t - t_first) / float(t_last - t_first) if t_last > t_first else 1.0
+        out.append(_jpeg(R.progress_bar(frame, frac, left, right, ox, oy)))
     return out, [int(t) for t in times], keys
 
 def build_status(city):
     temp, hum = R.ha_reading() if city.get("ha") else R.obs_reading(city["lat"], city["lon"])
-    return _jpeg(R.status_strip(temp, hum, time.strftime("%-I:%M %p"), city["name"]))
+    return _jpeg(R.status_strip(temp, hum, clock(time.time(), city), city["name"]))
 
 def radar_loop():
     while True:

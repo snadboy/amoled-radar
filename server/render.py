@@ -134,7 +134,10 @@ def decorate(img):
         d.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(125, 145, 165, RING_ALPHA), width=2)
     d.line([cx-8, cy, cx+8, cy], fill=(235, 240, 248, CROSS_ALPHA), width=2)
     d.line([cx, cy-8, cx, cy+8], fill=(235, 240, 248, CROSS_ALPHA), width=2)
-    d.text((img.width-6, 4), "50 mi", font=fnt(13), fill=(120, 134, 148, 130), anchor="ra")
+    # decorate() runs on the OVERSIZED canvas, which the orbit then crops by up to
+    # ORBIT_PX on every side -- so keep the label 2*ORBIT_PX in from the edges or
+    # some orbit positions cut it off ("50 m").
+    d.text((img.width - 2*ORBIT_PX - 6, 2*ORBIT_PX), "50 mi", font=fnt(13), fill=(120, 134, 148, 130), anchor="ra")
     return img
 
 _fc = {}
@@ -162,6 +165,75 @@ def status_strip(temp, hum, stamp, city=None):
     else:
         d.text((PANEL//2, y), stamp, font=fnt(17), fill=(115, 128, 142), anchor="mm")
     return img
+
+def place_pixels(places, lat, lon, ow, oh):
+    """Pixel position of each town on the OVERSIZED frame (ow x oh), which covers
+    exactly window() at any zoom. Towns the orbit could push off-screen are dropped."""
+    x0, y0, x1, y1 = window(BASE_ZOOM, 256, lat, lon)
+    out = []
+    for name, pla, plo in places:
+        px, py = deg2px(pla, plo, BASE_ZOOM, 256)
+        x = (px - x0) / (x1 - x0) * ow; y = (py - y0) / (y1 - y0) * oh
+        m = 2 * ORBIT_PX + 4
+        if m < x < ow - m and m < y < oh - m:
+            out.append((name, x, y))
+    return out
+
+def draw_places(frame, pts):
+    """Town markers on TOP of the radar, so they stay readable in the storms where
+    the context matters. Drawn before the orbit crop, so they drift with it.
+
+    Each label goes right of its dot unless that would hit the centre crosshair,
+    another label, or the edge -- then it flips left. (Canton's "Ann Arbor" ran
+    straight into the crosshair before this.)"""
+    d = ImageDraw.Draw(frame, "RGBA")
+    f = fnt(14)
+    cx, cy = frame.width / 2.0, frame.height / 2.0
+    keep_out = [(cx - 14, cy - 14, cx + 14, cy + 14)]          # the crosshair
+    edge = 2 * ORBIT_PX + 4
+    def hits(box):
+        if box[0] < edge or box[2] > frame.width - edge: return True
+        return any(not (box[2] < k[0] or box[0] > k[2] or box[3] < k[1] or box[1] > k[3]) for k in keep_out)
+    for name, x, y in pts:
+        w = d.textlength(name, font=f)
+        right = (x + 8, y - 9, x + 8 + w, y + 9)
+        left  = (x - 8 - w, y - 9, x - 8, y + 9)
+        box, anchor, tx = (right, "lm", x + 8) if not hits(right) or hits(left) else (left, "rm", x - 8)
+        keep_out.append(box)
+        d.ellipse([x - 3.5, y - 3.5, x + 3.5, y + 3.5], fill=(225, 230, 238, 230), outline=(0, 0, 0, 255), width=1)
+        d.text((tx, y), name, font=f, fill=(214, 220, 228, 225), anchor=anchor,
+               stroke_width=2, stroke_fill=(0, 0, 0, 255))
+    return frame
+
+def progress_bar(frame, frac, left, right, ox=0, oy=0):
+    """Loop progress along the bottom of the radar view: start time on the left,
+    latest time on the right, a fill and playhead for where this frame sits.
+
+    Burned into each frame server-side -- every frame knows its own position, so
+    the device needs no code for it. Kept dim (amber at reduced strength, grey
+    labels) and nudged by the orbit offset, because the track is static chrome
+    and static chrome is the burn-in risk on this panel."""
+    W, H = frame.size
+    d = ImageDraw.Draw(frame, "RGBA")
+    # soft dark band so the labels stay legible over heavy returns
+    band = 34
+    for k in range(band):
+        a = int(170 * (k / float(band)) ** 1.6)
+        d.line([0, H - band + k, W, H - band + k], fill=(0, 0, 0, a))
+    jx, jy = ox // 2, oy // 2
+    y = H - 13 + jy
+    f = fnt(13)
+    d.text((12 + jx, y), left, font=f, fill=(150, 160, 172, 235), anchor="lm",
+           stroke_width=2, stroke_fill=(0, 0, 0, 255))
+    d.text((W - 12 + jx, y), right, font=f, fill=(150, 160, 172, 235), anchor="rm",
+           stroke_width=2, stroke_fill=(0, 0, 0, 255))
+    x0 = 12 + jx + d.textlength(left, font=f) + 14     # clear of the playhead dot
+    x1 = W - 12 + jx - d.textlength(right, font=f) - 14
+    d.rounded_rectangle([x0, y - 1.5, x1, y + 1.5], radius=1.5, fill=(58, 65, 75, 255))
+    xf = x0 + (x1 - x0) * max(0.0, min(1.0, frac))
+    d.rounded_rectangle([x0, y - 1.5, xf, y + 1.5], radius=1.5, fill=(214, 150, 20, 255))
+    d.ellipse([xf - 4, y - 4, xf + 4, y + 4], fill=(240, 172, 30, 255))
+    return frame
 
 _station_cache = {}
 

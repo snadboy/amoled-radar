@@ -147,6 +147,24 @@ it. All three loops (~1-2.5 MB each) fit in flash together, so switching is inst
 
 The status strip now carries the city name (centre, above the time).
 
+**Local time per city.** Each city has a `tz` (Canton is `America/Detroit`). The
+container runs on UTC, and `time.strftime()` originally printed UTC -- Canton read
+3:00 PM at 11:00 AM local. All clocks go through `serve.clock(epoch, city)`.
+
+**Progress bar** (burned into each radar frame, `render.progress_bar`): loop start time
+left, latest time right, amber fill + playhead at this frame's position. Dark gradient band
+and black-outlined labels keep it readable over heavy returns. Nudged by the orbit offset.
+
+**Towns** (`places` per city, `render.draw_places`): 4 per city, drawn ON TOP of the radar
+so they stay readable in storms, and before the orbit crop so they drift with it. A label
+flips to the left of its dot if it would hit the centre crosshair, another label or the
+edge (Canton's "Ann Arbor" ran into the crosshair otherwise). Toledo was left out of Canton
+because it lands on the progress bar.
+
+⚠️ `decorate()` runs on the oversized canvas, so anything drawn there must sit
+`2*ORBIT_PX` in from the edges -- the "50 mi" label was being clipped to "50 m" at some
+orbit positions until that was fixed.
+
 ## Data sources — and their real limits
 
 ### RainViewer (radar) — free, no key
