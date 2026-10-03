@@ -184,6 +184,23 @@ at 27% humidity: 62,403 tan pixels before, 29 after. A light-blue patch remained
 is in the rain band and can't be filtered without hiding real light rain (at that humidity
 it is likely virga or October bird migration).
 
+**NOAA quality control mask** (`render.qc_mask`, all views): RainViewer appears to serve
+near-raw reflectivity, so it shows birds, insects and clutter that weather apps remove. NOAA/
+NCEP's quality-controlled CONUS base-reflectivity mosaic (dual-pol filtered) is a free WMS:
+`https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows`, frames every 1-2 min,
+~2 h kept (60 frames), any EPSG:3857 bbox. It is blockier than RainViewer and uses a
+different palette, so it is a MASK: RainViewer pixels survive only where NOAA (nearest frame
+within 10 min) has echo, dilated by `RADAR_QC_DILATE_KM` (4 km) for its coarser grid and the
+timestamp skew. Applied to real frames before tweening. NOAA unreachable -> frames go out
+unmasked rather than failing (manifest `qc_masked` = "masked/real").
+
+Found 2026-10-03: a light-blue patch east of St. Louis at 27-29% humidity that the owner's
+weather app didn't show. NOAA had ZERO returns there (October bird migration along the
+Mississippi flyway, beside KLSX). Validated both ways before shipping: St. Louis radar pixels
+-92%, the Texas storm -1%, national -25% (Plains specks; all real systems kept).
+Side effect: anything outside US radar coverage (Mexico, Caribbean) is blanked on the national
+view. The tan clear-air filter is now largely redundant but harmless, and is kept.
+
 **Ring scale fixed:** rings were scaled from the oversized canvas, which includes the orbit
 bleed, so the "50 mi" ring was drawn ~4% large. Now divided out (verified: Chicago measures
 34 mi vs 35 true).

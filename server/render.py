@@ -150,6 +150,67 @@ def suppress_clear_air(img):
     a[..., 3][tan] = 0
     return Image.fromarray(a, "RGBA")
 
+# ---------------------------------------------------------------------------
+# Quality control against NOAA's QC'd mosaic
+#
+# RainViewer appears to serve near-raw reflectivity, so it shows birds, insects
+# and clutter that weather apps strip out. NOAA/NCEP publishes a quality-
+# controlled CONUS base-reflectivity mosaic (dual-pol filtered), every 1-2 min,
+# ~2 h of history, as a WMS -- any bounding box, no tiles, no key. On
+# 2026-10-03 a light-blue patch east of St. Louis at 27% humidity had ZERO
+# returns there: migrating birds, not rain.
+#
+# It is blockier than RainViewer and uses another palette, so it is used as a
+# MASK: keep RainViewer's rendering, erase echo where NOAA shows none.
+# ---------------------------------------------------------------------------
+QC_WMS = "https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows"
+QC_UA  = {"User-Agent": "snadboy-homelab-radar/1.0 (dschless@gmail.com)"}
+QC_DILATE_KM = float(os.environ.get("RADAR_QC_DILATE_KM", "4"))
+QC_MAX_SKEW_S = 600          # don't use a NOAA frame more than 10 min from the RainViewer one
+
+def qc_times():
+    """Epoch seconds of every NOAA QC'd frame currently available."""
+    import re
+    from datetime import datetime, timezone
+    cap = urllib.request.urlopen(urllib.request.Request(
+        QC_WMS + "?service=WMS&version=1.3.0&request=GetCapabilities", headers=QC_UA), timeout=30).read().decode("utf-8", "ignore")
+    raw = re.search(r'<Dimension name="time"[^>]*>([^<]+)<', cap).group(1).split(",")
+    return [(datetime.strptime(t.strip()[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp(), t.strip())
+            for t in raw if t.strip()]
+
+def qc_mask(lat, lon, view, when, available, ow, oh):
+    """Boolean mask (oh x ow) of where NOAA's QC'd mosaic has echo nearest to
+    `when`, dilated by QC_DILATE_KM, over exactly the frame's oversized window.
+    Returns None if no NOAA frame is close enough in time."""
+    import math, numpy as np, cv2
+    if not available:
+        return None
+    t_epoch, t_iso = min(available, key=lambda a: abs(a[0] - when))
+    if abs(t_epoch - when) > QC_MAX_SKEW_S:
+        return None
+    z = (view or {}).get("base_zoom", BASE_ZOOM)
+    x0, y0, x1, y1 = window(z, 256, lat, lon, view)
+    world = (2 ** z) * 256.0; C = 2 * math.pi * 6378137.0
+    mx0, mx1 = (x0 / world - 0.5) * C, (x1 / world - 0.5) * C
+    my0, my1 = (0.5 - y1 / world) * C, (0.5 - y0 / world) * C       # EPSG:3857 metres
+    q = {"service": "WMS", "version": "1.3.0", "request": "GetMap", "layers": "conus_bref_qcd",
+         "styles": "", "crs": "EPSG:3857", "bbox": "%f,%f,%f,%f" % (mx0, my0, mx1, my1),
+         "width": ow, "height": oh, "format": "image/png", "transparent": "true", "time": t_iso}
+    import urllib.parse
+    png = urllib.request.urlopen(urllib.request.Request(QC_WMS + "?" + urllib.parse.urlencode(q), headers=QC_UA), timeout=40).read()
+    a = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))[..., 3] > 0
+    # metres per displayed pixel, in ground terms at this latitude
+    m_per_px = (mx1 - mx0) / ow * math.cos(math.radians(lat))
+    r = max(1, int(round(QC_DILATE_KM * 1000.0 / m_per_px)))
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    return cv2.dilate(a.astype(np.uint8), k) > 0
+
+def apply_mask(layer, mask):
+    import numpy as np
+    a = np.asarray(layer.convert("RGBA")).copy()
+    a[..., 3][~mask] = 0
+    return Image.fromarray(a, "RGBA")
+
 def is_watermark(img):
     c = img.getcolors(maxcolors=1 << 20) or []
     d = {col: n for n, col in c}

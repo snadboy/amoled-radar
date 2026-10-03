@@ -109,6 +109,13 @@ def build_radar(city, maps):
 
     host = maps["host"]
     want = (maps["radar"]["past"] + maps["radar"].get("nowcast", []))[-N_FRAMES:]
+    # NOAA quality control: optional -- if NOAA is unreachable, carry on unmasked
+    try:
+        qc_avail = R.qc_times()
+    except Exception as e:
+        qc_avail = []
+        print("[radar] NOAA QC index unavailable (%s) -- frames not QC-masked" % str(e)[:60], flush=True)
+    qc_used = 0
     layers, stamps = [], []
     for f in want:
         layer = R.radar(host, f["path"], lat, lon, city)
@@ -117,7 +124,14 @@ def build_radar(city, maps):
                                "-- the free tier caps at 7" % city.get("radar_zoom", R.RADAR_ZOOM))
         if suppress:
             layer = R.suppress_clear_air(layer)      # before resampling blends colours
-        layers.append(layer.resize((OW, OH), R.Image.LANCZOS)); stamps.append(f["time"])
+        layer = layer.resize((OW, OH), R.Image.LANCZOS)
+        try:
+            mask = R.qc_mask(lat, lon, city, f["time"], qc_avail, OW, OH)
+            if mask is not None:
+                layer = R.apply_mask(layer, mask); qc_used += 1
+        except Exception as e:
+            print("[radar] %s NOAA QC frame failed (%s) -- left unmasked" % (city["id"], str(e)[:60]), flush=True)
+        layers.append(layer); stamps.append(f["time"])
 
     # interpolate the radar layer only, then composite every layer the same way
     seq, times, keys = [], [], []
@@ -140,7 +154,7 @@ def build_radar(city, maps):
                             R.ORBIT_PX + ox + R.PANEL, R.ORBIT_PX + oy + R.VIEW_H))
         frac = (t - t_first) / float(t_last - t_first) if t_last > t_first else 1.0
         out.append(_jpeg(R.progress_bar(frame, frac, left, right, ox, oy)))
-    return out, [int(t) for t in times], keys, suppress
+    return out, [int(t) for t in times], keys, {"clear_air": suppress, "qc_masked": qc_used, "real_frames": len(layers)}
 
 def build_status(city):
     temp, hum = reading(city)
@@ -161,10 +175,11 @@ def radar_loop():
                 with _lock: _state[c["id"]]["radar_err"] = "RainViewer index unavailable"
                 continue
             try:
-                frames, times, keys, suppressed = build_radar(c, maps)
+                frames, times, keys, info = build_radar(c, maps)
                 with _lock:
                     _state[c["id"]].update(loop_id=int(time.time()), frames=frames, times=times,
-                                           keys=keys, clear_air_filtered=suppressed,
+                                           keys=keys, clear_air_filtered=info["clear_air"],
+                                           qc_masked="%d/%d" % (info["qc_masked"], info["real_frames"]),
                                            built=int(time.time()), radar_err=None)
                 print("[radar] %s ok (%d frames)" % (c["id"], len(frames)), flush=True)
             except Exception as e:
@@ -231,6 +246,7 @@ class H(BaseHTTPRequestHandler):
                     "sizes": [len(f) for f in st["frames"]], "times": st["times"], "keys": st["keys"],
                     "tweens_per_10min": TWEENS, "tween_mode": TWEEN_MODE,
                     "clear_air_filtered": st.get("clear_air_filtered"),
+                    "qc_masked": st.get("qc_masked"),       # real frames masked by NOAA QC
                     "radar_err": st["radar_err"], "status_err": st["status_err"]})
             if rest == "status.jpg":
                 if not st["status"]: return self._json({"error": "not ready"}, 503)
