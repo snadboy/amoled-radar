@@ -15,6 +15,9 @@ Layer zooms are decoupled on purpose:
 import io, json, math, os, time, urllib.request
 from PIL import Image, ImageDraw, ImageFont
 
+# Centre of the radar view. The default is rounded to ~1km on purpose -- the
+# display spans 161km, so finer precision is invisible here and there is no
+# reason for a public repo to carry an exact home position. Override in .env.
 LAT  = float(os.environ.get('RADAR_LAT', '41.90'))
 LON  = float(os.environ.get('RADAR_LON', '-88.32'))
 RADIUS_MI   = 50.0
