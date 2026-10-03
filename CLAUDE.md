@@ -26,16 +26,30 @@ basemap, with a one-line outdoor temp/humidity strip across the bottom.
 
 ---
 
-## The constraint that dictates the whole design
+## The hardware constraint, and the design choice
 
 **The ESP32-C6 has no PSRAM.** The chip has no external PSRAM interface at all — just
 512 KB HP SRAM + 16 KB LP SRAM. A single 480×480 RGB565 framebuffer is **450 KB**, and
-the WiFi stack wants 60–80 KB. A full framebuffer therefore does not fit, let alone
-decoded radar frames plus a basemap.
+the WiFi stack wants 60–80 KB. So the device can never hold a whole frame: whatever
+draws to the panel must work in horizontal bands (~40 KB working set).
 
-**Consequence:** all compositing happens on a server. The device never holds a whole
-frame — it streams each one in horizontal bands straight to the panel (~40 KB working
-set). It is a thin client by necessity, not by preference.
+**That rules out a framebuffer, not on-device compositing.** A self-contained device is
+feasible: basemap pre-rendered into flash, RainViewer tiles fetched and PNG-decoded
+row-by-row, resampled and alpha-blended band by band. An earlier version of this file
+called the server a "necessity" — that was wrong.
+
+**The server is a deliberate choice (confirmed by the owner 2026-10-03)**, because:
+
+- **The upstreams are fragile.** Three silent failures surfaced in the first evening
+  (RainViewer zoom cap, its watermark tiles, CARTO's new key requirement — see below).
+  Server-side, each fix is a Python edit + redeploy. On-device, each is a firmware
+  rebuild + OTA, discovered only because the screen looks wrong.
+- **Firmware stays trivial:** fetch JPEG -> decode in bands -> blit. No PNG streaming,
+  resampling, blending, tile staging or watermark detection in C.
+- **Better output:** Pillow LANCZOS resampling and the AMOLED darkening LUT.
+- **Cost:** one more moving part. If bedrock or the container is down, the display keeps
+  animating its last cached loop and goes stale. (Serverless still needs internet + HA,
+  so it would only drop the bedrock dependency.)
 
 The board does have **16 MB flash**, which is the saving grace: the whole animation loop
 (~12 frames × ~25 KB JPEG ≈ 300 KB) caches locally, so the device animates from flash and
