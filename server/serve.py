@@ -22,6 +22,11 @@ RADAR_S    = int(os.environ.get("RADAR_REFRESH_S", "600"))
 STATUS_S   = int(os.environ.get("STATUS_REFRESH_S", "60"))
 N_FRAMES   = int(os.environ.get("RADAR_FRAMES", "12"))
 QUALITY    = int(os.environ.get("RADAR_JPEG_QUALITY", "86"))
+# In-between frames per 10 minutes of radar time (0 disables smoothing). The
+# manifest lists which frames are real ("keys"), so firmware that measures its
+# own decode rate as too slow can play real frames only.
+TWEENS     = int(os.environ.get("RADAR_TWEENS", "3"))
+TWEEN_MODE = os.environ.get("RADAR_TWEEN_MODE", "motion")   # or "blend"
 
 _lock   = threading.Lock()
 _state  = {"loop_id": 0, "frames": [], "status": b"", "built": 0, "status_built": 0,
@@ -41,18 +46,31 @@ def build_radar():
     host = maps["host"]
     want = (maps["radar"]["past"] + maps["radar"].get("nowcast", []))[-N_FRAMES:]
 
-    out, stamps = [], []
+    layers, stamps = [], []
     for f in want:
         layer = R.radar(host, f["path"])
         if R.is_watermark(layer):
             raise RuntimeError("RainViewer returned a watermark tile at zoom %d "
                                "-- the free tier caps at 7" % R.RADAR_ZOOM)
-        layer = layer.resize((OW, OH), R.Image.LANCZOS)
+        layers.append(layer.resize((OW, OH), R.Image.LANCZOS)); stamps.append(f["time"])
+
+    # interpolate the radar layer only, then composite every layer the same way
+    seq, times, keys = [], [], []
+    for i, layer in enumerate(layers):
+        keys.append(len(seq)); seq.append(layer); times.append(stamps[i])
+        if i + 1 < len(layers) and TWEENS > 0:
+            n = R.tween_count(stamps[i + 1] - stamps[i], TWEENS)
+            for k, tw in enumerate(R.tweens(layer, layers[i + 1], n, TWEEN_MODE)):
+                seq.append(tw)
+                times.append(stamps[i] + (stamps[i + 1] - stamps[i]) * (k + 1) / (n + 1.0))
+
+    out = []
+    for layer in seq:
         frame = base.copy(); frame.paste(layer, (0, 0), layer)
         frame = frame.crop((R.ORBIT_PX + ox, R.ORBIT_PX + oy,
                             R.ORBIT_PX + ox + R.PANEL, R.ORBIT_PX + oy + R.VIEW_H))
-        out.append(_jpeg(frame)); stamps.append(f["time"])
-    return out, stamps
+        out.append(_jpeg(frame))
+    return out, {"times": [int(t) for t in times], "keys": keys}
 
 def build_status():
     temp, hum = R.ha_reading()
@@ -70,9 +88,9 @@ def _loop(name, fn, period, apply_fn):
         time.sleep(period)
 
 def _apply_radar(v):
-    frames, stamps = v
-    _state.update(loop_id=int(time.time()), frames=frames, stamps=stamps,
-                  built=int(time.time()), radar_err=None)
+    frames, meta = v
+    _state.update(loop_id=int(time.time()), frames=frames, times=meta["times"],
+                  keys=meta["keys"], built=int(time.time()), radar_err=None)
 
 def _apply_status(v):
     _state.update(status=v, status_built=int(time.time()), status_err=None)
@@ -96,7 +114,9 @@ class H(BaseHTTPRequestHandler):
                 "w": R.PANEL, "h": R.PANEL, "view_h": R.VIEW_H, "status_h": R.STATUS_H,
                 "built": st["built"], "status_built": st["status_built"],
                 "sizes": [len(f) for f in st["frames"]],
-                "stamps": st.get("stamps", []),
+                "times": st.get("times", []),
+                "keys": st.get("keys", []),
+                "tweens_per_10min": TWEENS, "tween_mode": TWEEN_MODE,
                 "radar_err": st["radar_err"], "status_err": st["status_err"],
             }).encode())
         if p == "/status.jpg":

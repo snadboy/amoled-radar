@@ -212,3 +212,74 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# Smoothing: in-between frames
+#
+# RainViewer frames are 10 minutes apart, so a storm at 30 mph jumps ~5 miles
+# (~20 px here) per frame -- a cut, not motion. The device cannot blend frames
+# itself (it can never hold even one full frame), so tweens are rendered here
+# and the firmware just plays more frames.
+#
+# Interpolate the RADAR LAYER ONLY, then composite over the static basemap.
+# Interpolating finished frames would make the optical flow warp coastlines.
+#
+# Work in PREMULTIPLIED alpha: transparent radar pixels carry junk RGB (e.g.
+# rgba(71,112,76,0)), and blending straight RGBA drags that into dark fringes.
+# ---------------------------------------------------------------------------
+
+def _premul(img):
+    import numpy as np
+    a = np.asarray(img.convert("RGBA"), dtype=np.float32).copy()
+    a[..., :3] *= a[..., 3:4] / 255.0
+    return a
+
+def _unpremul(arr):
+    import numpy as np
+    a = arr[..., 3:4] / 255.0
+    rgb = np.where(a > 1e-3, arr[..., :3] / np.maximum(a, 1e-3), 0.0)
+    out = np.concatenate([rgb, arr[..., 3:4]], axis=2)
+    return Image.fromarray(np.clip(out + 0.5, 0, 255).astype(np.uint8), "RGBA")
+
+def _flow(a_pm, b_pm):
+    """Dense motion from a to b, computed on premultiplied luminance so the
+    texture inside heavy cells (not just the echo outline) drives the flow."""
+    import cv2, numpy as np
+    def key(pm):
+        l = 0.30 * pm[..., 0] + 0.59 * pm[..., 1] + 0.11 * pm[..., 2]
+        l = 0.5 * l + 0.5 * pm[..., 3]          # outline matters too
+        return cv2.GaussianBlur(np.clip(l, 0, 255).astype(np.uint8), (0, 0), 1.5)
+    f = cv2.calcOpticalFlowFarneback(key(a_pm), key(b_pm), None,
+                                     0.5, 5, 25, 5, 7, 1.5, 0)
+    # radar fields move coherently; smooth the field so cells translate as a
+    # whole instead of shearing at their edges
+    return cv2.GaussianBlur(f, (0, 0), 6)
+
+def tweens(a, b, n, mode="motion"):
+    """n in-between RGBA layers from a to b. mode: "motion" (optical flow) or
+    "blend" (plain crossfade, kept for comparison)."""
+    import cv2, numpy as np
+    if n <= 0:
+        return []
+    A, B = _premul(a), _premul(b)
+    ts = [(k + 1) / (n + 1.0) for k in range(n)]
+    if mode == "blend":
+        return [_unpremul((1 - t) * A + t * B) for t in ts]
+    F01, F10 = _flow(A, B), _flow(B, A)
+    h, w = A.shape[:2]
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    out = []
+    for t in ts:
+        Wa = cv2.remap(A, gx - t * F01[..., 0], gy - t * F01[..., 1],
+                       cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        Wb = cv2.remap(B, gx - (1 - t) * F10[..., 0], gy - (1 - t) * F10[..., 1],
+                       cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        out.append(_unpremul((1 - t) * Wa + t * Wb))
+    return out
+
+def tween_count(gap_s, per_10min):
+    """In-betweens for one gap, scaled by real time so a skipped RainViewer
+    frame (a 20-minute gap) plays at the same speed as a normal one."""
+    steps = max(1, int(round(gap_s / 600.0))) * (per_10min + 1)
+    return steps - 1

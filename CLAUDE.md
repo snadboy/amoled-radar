@@ -105,8 +105,10 @@ Two limits found the hard way, both verified by experiment:
    **Workaround:** `size=512` tiles at z=7 → 455 m/px, which is already at NEXRAD's native
    resolution (~250 m–1 km), so nothing real is lost.
 2. **`color` and `snow` are ignored.** All 9 palettes return byte-identical tiles
-   (same md5). Only `smooth` has any effect. You get one fixed palette: a graded blue
-   reflectivity ramp plus semi-transparent tan for snow (53 distinct colours).
+   (same md5). Only `smooth` has any effect. You get one fixed palette: light rain in
+   blues, heavy cells **yellow -> orange -> red**, plus semi-transparent tan at the
+   lightest edges. It already reads as weather radar, so no remap is needed (an
+   earlier note here called it "a blue ramp"; that came from a light-rain sample).
 
 ### Basemap — Esri, free, no key, **not** CARTO
 
@@ -148,6 +150,26 @@ Output: ~24–45 KB JPEG per 480×480 frame (bigger when there's heavy precipita
 **Intended home:** `bedrock` (11 containers, load 0.03, 4.2/16 GB) as a dockhand stack.
 
 ---
+
+## Smoothing (in-between frames)
+
+Real frames are 10 min apart; a 30 mph storm jumps ~5 mi (~20 px) per frame, which
+reads as a cut. The device cannot blend (it never holds a whole frame), so the server
+renders in-betweens and the device just plays more frames.
+
+- **Motion, not crossfade.** `render.tweens()` uses OpenCV Farneback optical flow and
+  moves the echoes along the measured path. Crossfade double-exposes storms and blends
+  yellow over blue into **olive -- a colour not on the intensity scale**, so it misstates
+  intensity. Measured motion on a real storm: median 7.8 px, p90 14 px per 10 min.
+- **Interpolate the radar layer only**, then composite over the basemap; flow on
+  finished frames would warp coastlines. Work in **premultiplied alpha** -- transparent
+  radar pixels carry junk RGB (e.g. `rgba(71,112,76,0)`) that otherwise bleeds in.
+- `RADAR_TWEENS` (default 3) per 10 min, scaled by real time (`tween_count`), so a
+  skipped RainViewer frame (20-min gap -> 7 in-betweens) plays at the same speed.
+- 12 real frames -> 49 total, ~2.2 MB per loop (flash budget 16 MB).
+- Manifest carries `keys` (indices of real frames) and `times`. **Device frame rate is
+  unknown** -- the C6 has no JPEG hardware; ~4 fps is a guess. If it is slow, firmware
+  plays `keys` only.
 
 ## Burn-in
 

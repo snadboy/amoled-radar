@@ -6,7 +6,8 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends fonts-dejavu-core curl \
  && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "pillow>=10.2,<12"
+# numpy + OpenCV for optical-flow in-between frames (the headless wheel needs no GUI libs)
+RUN pip install --no-cache-dir "pillow>=10.2,<12" "numpy>=1.26,<3" "opencv-python-headless>=4.9,<5"
 
 WORKDIR /app
 COPY render.py serve.py ./
