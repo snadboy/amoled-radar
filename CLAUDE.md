@@ -135,6 +135,43 @@ Output: ~24–45 KB JPEG per 480×480 frame (bigger when there's heavy precipita
 
 ---
 
+## Burn-in
+
+**This design is unusually exposed, because the radar returns are the ONLY thing that
+moves.** Everything else sits on identical pixels forever: the 25/50 mi range rings, the
+centre crosshair, the "50 mi" label, the status divider, the degree/percent glyphs, every
+coastline and county line in the basemap, and the leading digit of the temperature.
+
+Organic emitters age by cumulative luminance x time, roughly L^1.5-2, blue fastest. This
+panel has **none** of the compensation phones and TVs ship (no pixel-shift, no uniformity
+compensation, no logo dimming). Small AMOLEDs are typically rated ~10-30k h to 50%
+luminance at full drive; 24/7 is 8,760 h/yr.
+
+Measured from HA over 7 days:
+
+| | |
+|---|---|
+| Office occupied | 47.6 h of 168 h = **28.3%** of the week |
+| Ambient illuminance | median 97 lx, p75 129, max 297 — never a bright room |
+
+Mitigations, strongest first:
+
+1. **Blank on vacancy — 72% reduction, measured.** `binary_sensor.upstairs_office_lwr02_occupancy`.
+   A ~3.5x life extension on its own. *(firmware + HA — not yet built)*
+2. **Run dim.** Wear is superlinear in brightness and the room's median is only 97 lx, so
+   25-40% looks fine and more than halves wear. CO5300 brightness is DCS `0x51`; drive it
+   from `sensor.upstairs_office_lwr02_illuminance`. *(firmware — not yet built)*
+3. **Pixel orbit — DONE.** The window is rendered oversized by `ORBIT_PX` and the crop
+   walks a 24-position path (+/-6 px). ⚠️ The offset is **per refresh cycle, not per
+   frame** — deriving it per frame makes the animation visibly judder (that bug was
+   written and caught here; the regression check is comparing a static basemap corner
+   across frames in a loop, which must be byte-identical).
+4. **Dim static chrome — DONE.** Ring alpha 85 -> 55, crosshair 190 -> 110 and off pure
+   white, "50 mi" label 200 -> 130. All tunable via `RADAR_RING_ALPHA`,
+   `RADAR_CROSS_ALPHA`, `RADAR_ORBIT_PX`.
+5. **True black everywhere else — DONE** via `darken_for_amoled()`. Black pixels are
+   genuinely off and age zero.
+
 ## Next steps
 
 1. Package the renderer as a container + HTTP endpoint on `bedrock` via dockhand.

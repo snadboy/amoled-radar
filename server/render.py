@@ -45,6 +45,8 @@ def window(z, tile):
     m      = mpp(LAT, z, tile)
     half_h = span_m / m / 2.0
     half_w = half_h * (PANEL / VIEW_H)
+    bleed  = (ORBIT_PX + 2) / float(VIEW_H) * (half_h * 2)   # keep the orbit in-bounds
+    half_h += bleed; half_w += bleed
     cx, cy = deg2px(LAT, LON, z, tile)
     return cx - half_w, cy - half_h, cx + half_w, cy + half_h
 
@@ -72,6 +74,21 @@ def mosaic(url_for, z, tile, cache_key=None):
     if cache_key:
         os.makedirs(CACHE, exist_ok=True); out.save(os.path.join(CACHE, cache_key))
     return out
+
+# Burn-in mitigation. AMOLED emitters age by cumulative luminance*time, roughly
+# L^1.5-2, and this panel has no pixel-shift or uniformity compensation of its
+# own. The radar returns move; EVERYTHING else here is static -- rings,
+# crosshair, labels, basemap -- so static chrome is the whole risk.
+ORBIT_PX    = int(os.environ.get("RADAR_ORBIT_PX", "6"))      # +/- px of slow drift
+ORBIT_STEPS = int(os.environ.get("RADAR_ORBIT_STEPS", "24"))  # positions per cycle
+RING_ALPHA  = int(os.environ.get("RADAR_RING_ALPHA", "55"))   # was 85
+CROSS_ALPHA = int(os.environ.get("RADAR_CROSS_ALPHA", "110")) # was 190
+
+def orbit_offset(seq):
+    """Walk a slow Lissajous-ish path so no static edge sits on one pixel."""
+    import math as _m
+    a = 2.0 * _m.pi * (seq % ORBIT_STEPS) / ORBIT_STEPS
+    return int(round(ORBIT_PX * _m.sin(a))), int(round(ORBIT_PX * _m.sin(2 * a) / 2.0))
 
 DARK_GAMMA = float(os.environ.get("RADAR_DARK_GAMMA", "1.7"))
 DARK_SCALE = float(os.environ.get("RADAR_DARK_SCALE", "0.72"))
@@ -106,10 +123,10 @@ def decorate(img):
     px_per_mi = (img.height/2) / RADIUS_MI
     for mi in (25, 50):
         r = mi*px_per_mi
-        d.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(125, 145, 165, 85), width=2)
-    d.line([cx-8, cy, cx+8, cy], fill=(255, 255, 255, 190), width=2)
-    d.line([cx, cy-8, cx, cy+8], fill=(255, 255, 255, 190), width=2)
-    d.text((img.width-6, 4), "50 mi", font=fnt(13), fill=(130, 145, 160, 200), anchor="ra")
+        d.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(125, 145, 165, RING_ALPHA), width=2)
+    d.line([cx-8, cy, cx+8, cy], fill=(235, 240, 248, CROSS_ALPHA), width=2)
+    d.line([cx, cy-8, cx, cy+8], fill=(235, 240, 248, CROSS_ALPHA), width=2)
+    d.text((img.width-6, 4), "50 mi", font=fnt(13), fill=(120, 134, 148, 130), anchor="ra")
     return img
 
 _fc = {}
@@ -161,22 +178,30 @@ def main():
           % (PANEL, VIEW_H, STATUS_H, RADIUS_MI*2*1609.344/VIEW_H))
     bm = darken_for_amoled(basemap())
     print("  basemap mosaic %s%s" % (bm.size, "  (CACHED)" if os.path.exists(os.path.join(CACHE, "base_z%d.png" % BASE_ZOOM)) else ""))
-    base = decorate(bm.resize((PANEL, VIEW_H), Image.LANCZOS)).convert("RGB")
+    OW, OH = PANEL + 2*ORBIT_PX, VIEW_H + 2*ORBIT_PX
+    base = decorate(bm.resize((OW, OH), Image.LANCZOS)).convert("RGB")
 
     maps = json.loads(fetch("https://api.rainviewer.com/public/weather-maps.json"))
     host, frames = maps["host"], maps["radar"]["past"] + maps["radar"].get("nowcast", [])
     n = int(os.environ.get("RADAR_FRAMES", "4"))
     temp, hum = ha_reading()
+    # one orbit position per refresh cycle -- constant across the loop so the
+    # animation does not judder, advancing every 10 min so no static edge
+    # (rings, crosshair, coastlines) occupies one pixel for more than that.
+    ox, oy = orbit_offset(int(time.time() // 600))
     print("  HA outdoor: %s F / %s %%" % (temp, hum))
     for i, f in enumerate(frames[-n:]):
         rl = radar(host, f["path"])
         if is_watermark(rl):
             print("    frame%02d  WATERMARK -- zoom %d rejected by RainViewer" % (i, RADAR_ZOOM)); continue
-        rl = rl.resize((PANEL, VIEW_H), Image.LANCZOS)
+        rl = rl.resize((OW, OH), Image.LANCZOS)
         live = sum(1 for p in rl.getdata() if p[3] > 0)
         frame = base.copy(); frame.paste(rl, (0, 0), rl)
+        frame = frame.crop((ORBIT_PX + ox, ORBIT_PX + oy,
+                            ORBIT_PX + ox + PANEL, ORBIT_PX + oy + VIEW_H))
         full = Image.new("RGB", (PANEL, PANEL), (0, 0, 0)); full.paste(frame, (0, 0))
-        full.paste(status_strip(temp, hum, time.strftime("%-I:%M %p", time.localtime(f["time"]))), (0, VIEW_H))
+        strip = status_strip(temp, hum, time.strftime("%-I:%M %p", time.localtime(f["time"])))
+        full.paste(strip, (ox // 2, VIEW_H))
         p = os.path.join(out, "frame%02d.jpg" % i)
         full.save(p, "JPEG", quality=86, optimize=True)
         print("    frame%02d  %s  %6d radar px  %d bytes"
