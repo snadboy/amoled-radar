@@ -108,6 +108,7 @@ static volatile bool s_active, s_screen_on = true;
 static TaskHandle_t s_net;
 
 static lv_obj_t *s_root, *s_map, *s_radar, *s_msg;
+static lv_obj_t *s_pills[4];            // range, clock, status, attribution: labels keep out
 static lv_obj_t *s_range_label, *s_clock_label, *s_wifi_label, *s_status_label;
 static lv_obj_t *s_panel, *s_panel_title, *s_panel_route, *s_panel_aircraft, *s_panel_body;
 
@@ -259,6 +260,51 @@ static float category_scale(uint8_t cat)
     return cat == 2 ? 0.75f : (cat == 5 || cat == 6) ? 1.25f : 1.0f;   // light / heavy, high-performance
 }
 
+// Inside the rounded glass (local coordinates), with a small margin.
+static bool in_glass(int32_t x, int32_t y)
+{
+    int W = BOARD.w, H = BOARD.h, r = BOARD.corner_r, pad = 4;
+    if (x < pad || y < pad || x >= W - pad || y >= H - pad) return false;
+    int32_t cx = x < r ? r : x >= W - r ? W - r : x, cy = y < r ? r : y >= H - r ? H - r : y;
+    int32_t dx = x - cx, dy = y - cy;
+    return dx * dx + dy * dy <= (r - pad) * (r - pad);
+}
+
+// A label box (local coordinates) that is fully visible and clear of the UI pills.
+static bool label_fits(int32_t x0, int32_t y0, int32_t x1, int32_t y1)
+{
+    if (!in_glass(x0, y0) || !in_glass(x1, y0) || !in_glass(x0, y1) || !in_glass(x1, y1)) return false;
+    int32_t rx = lv_obj_get_x(s_root), ry = lv_obj_get_y(s_root);
+    for (int i = 0; i < 4; i++) {
+        lv_area_t a;
+        lv_obj_get_coords(s_pills[i], &a);
+        if (x0 <= a.x2 - rx && x1 >= a.x1 - rx && y0 <= a.y2 - ry && y1 >= a.y1 - ry) return false;
+    }
+    return true;
+}
+
+// Callsign + altitude beside the plane: right if it fits, else left, else not at all
+// (a selected plane always gets one). Near the rounded corners or under a pill, a
+// label was being cut off.
+static void draw_label(lv_layer_t *layer, const track_t *t, int32_t x, int32_t y, int32_t ox, int32_t oy, bool selected)
+{
+    char alt[16], buf[32];
+    format_altitude(alt, sizeof(alt), t->a.alt_m);
+    snprintf(buf, sizeof(buf), "%s\n%s", t->a.callsign[0] ? t->a.callsign : "?", alt);
+    const lv_font_t *f = &lv_font_montserrat_14;
+    lv_point_t sz;
+    lv_text_get_size(&sz, buf, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    int32_t lx = x + 11, ly = y - 6;
+    if (!label_fits(lx, ly, lx + sz.x, ly + sz.y)) {
+        lx = x - 11 - sz.x;
+        if (!label_fits(lx, ly, lx + sz.x, ly + sz.y)) {
+            if (!selected) return;
+            lx = x + 11;
+        }
+    }
+    draw_text(layer, buf, lx + ox, ly + oy, sz.x + 4, f, lv_color_hex(0xd8d8d8));
+}
+
 static void radar_draw_cb(lv_event_t *e)
 {
     if (!s_bundle_shown) return;
@@ -268,6 +314,11 @@ static void radar_draw_cb(lv_event_t *e)
     trail.width = 2;
     trail.round_start = trail.round_end = 1;
     int W = BOARD.w, H = BOARD.h;
+    // Screen positions are kept in map coordinates (hit-testing undoes the pixel
+    // shift); drawing adds the shift back so planes stay on the map's towns.
+    lv_area_t rc;
+    lv_obj_get_coords(s_radar, &rc);
+    int32_t ox = rc.x1, oy = rc.y1;
 
     track_t *sel = NULL;
     for (int i = 0; i < s_track_count; i++) {
@@ -294,32 +345,26 @@ static void radar_draw_cb(lv_event_t *e)
             int32_t qx, qy;
             project(t->trail_lat[idx], t->trail_lon[idx], &qx, &qy);
             if (k > t->trail_n - shown) {
-                trail.p1 = (lv_point_precise_t){ px, py };
-                trail.p2 = (lv_point_precise_t){ qx, qy };
+                trail.p1 = (lv_point_precise_t){ px + ox, py + oy };
+                trail.p2 = (lv_point_precise_t){ qx + ox, qy + oy };
                 lv_draw_line(layer, &trail);
             }
             px = qx; py = qy;
         }
         if (t->trail_n) {
-            trail.p1 = (lv_point_precise_t){ px, py };
-            trail.p2 = (lv_point_precise_t){ x, y };
+            trail.p1 = (lv_point_precise_t){ px + ox, py + oy };
+            trail.p2 = (lv_point_precise_t){ x + ox, y + oy };
             lv_draw_line(layer, &trail);
         }
 
-        draw_plane(layer, x, y, t->a.track_deg, category_scale(t->a.category), col);
-
-        if (s_show_labels || selected) {
-            char alt[16], buf[32];
-            format_altitude(alt, sizeof(alt), t->a.alt_m);
-            snprintf(buf, sizeof(buf), "%s\n%s", t->a.callsign[0] ? t->a.callsign : "?", alt);
-            draw_text(layer, buf, x + 11, y - 6, 90, &lv_font_montserrat_14, lv_color_hex(0xd8d8d8));
-        }
+        draw_plane(layer, x + ox, y + oy, t->a.track_deg, category_scale(t->a.category), col);
+        if (s_show_labels || selected) draw_label(layer, t, x, y, ox, oy, selected);
     }
 
     if (sel) {
         lv_draw_arc_dsc_t d;
         lv_draw_arc_dsc_init(&d);
-        d.center.x = sel->sx; d.center.y = sel->sy;
+        d.center.x = sel->sx + ox; d.center.y = sel->sy + oy;
         d.radius = 16; d.start_angle = 0; d.end_angle = 360; d.width = 2;
         d.color = lv_color_white();
         lv_draw_arc(layer, &d);
@@ -479,10 +524,10 @@ static void update_status(void)
     lv_color_t wifi_col = lv_color_hex(0x45f07a);
     switch (s_status) {
     case ST_NONE:     lv_label_set_text(s_status_label, "Connecting..."); wifi_col = lv_color_hex(0x9a9a9a); break;
-    case ST_HUB_DOWN: lv_label_set_text_fmt(s_status_label, "%d aircraft  -  hub unreachable", visible); wifi_col = lv_color_hex(0xff4040); break;
-    case ST_AUTH:     lv_label_set_text(s_status_label, "OpenSky login failed on the hub"); wifi_col = lv_color_hex(0xff4040); break;
-    case ST_RATE:     lv_label_set_text(s_status_label, "OpenSky daily credits used up - waiting"); wifi_col = lv_color_hex(0xffb52b); break;
-    case ST_ERROR:    lv_label_set_text_fmt(s_status_label, "%d aircraft  -  fetch failed, %lus old", visible, (unsigned long)age); wifi_col = lv_color_hex(0xffb52b); break;
+    case ST_HUB_DOWN: lv_label_set_text_fmt(s_status_label, "%d aircraft  -  hub down", visible); wifi_col = lv_color_hex(0xff4040); break;
+    case ST_AUTH:     lv_label_set_text(s_status_label, "OpenSky login failed"); wifi_col = lv_color_hex(0xff4040); break;
+    case ST_RATE:     lv_label_set_text(s_status_label, "OpenSky credits used up"); wifi_col = lv_color_hex(0xffb52b); break;
+    case ST_ERROR:    lv_label_set_text_fmt(s_status_label, "%d aircraft  -  stale %lus", visible, (unsigned long)age); wifi_col = lv_color_hex(0xffb52b); break;
     case ST_IDLE:     lv_label_set_text(s_status_label, "Waking up..."); break;
     default:          lv_label_set_text_fmt(s_status_label, "%d aircraft  -  %lus", visible, (unsigned long)age); break;
     }
@@ -758,7 +803,7 @@ static void build_ui(void)
 
     // Range badge (tap to zoom). These pill positions match the hub's
     // basemap.ui_boxes(), which keeps town labels out from under them.
-    lv_obj_t *range = make_pill(s_root, LV_ALIGN_TOP_LEFT, in, 14);
+    lv_obj_t *range = s_pills[0] = make_pill(s_root, LV_ALIGN_TOP_LEFT, in, 14);
     lv_obj_add_flag(range, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(range, 12);
     lv_obj_add_event_cb(range, range_click_cb, LV_EVENT_CLICKED, NULL);
@@ -767,7 +812,7 @@ static void build_ui(void)
     lv_obj_set_style_text_font(s_range_label, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_range_label, lv_color_white(), 0);
 
-    lv_obj_t *clock = make_pill(s_root, LV_ALIGN_TOP_RIGHT, -in, 14);
+    lv_obj_t *clock = s_pills[1] = make_pill(s_root, LV_ALIGN_TOP_RIGHT, -in, 14);
     lv_obj_set_flex_flow(clock, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(clock, 8, 0);
     s_wifi_label = lv_label_create(clock);
@@ -778,13 +823,13 @@ static void build_ui(void)
     lv_obj_set_style_text_font(s_clock_label, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(s_clock_label, lv_color_white(), 0);
 
-    lv_obj_t *status = make_pill(s_root, LV_ALIGN_BOTTOM_LEFT, in, -14);
+    lv_obj_t *status = s_pills[2] = make_pill(s_root, LV_ALIGN_BOTTOM_LEFT, in, -14);
     s_status_label = lv_label_create(status);
-    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_16, 0);   // 12 was too small to read
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(0xd8d8d8), 0);
     lv_label_set_text(s_status_label, "Starting...");
 
-    lv_obj_t *attrib = lv_label_create(s_root);
+    lv_obj_t *attrib = s_pills[3] = lv_label_create(s_root);
     lv_label_set_text(attrib, "Esri, OSM | OpenSky");
     lv_obj_set_style_text_font(attrib, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(attrib, lv_color_hex(0x707070), 0);
