@@ -34,8 +34,10 @@ One server for every small display: weather radar today, aircraft next (ported f
   Both run the hub firmware (Display 1 migrated by OTA 2026-10-04). Names live in the hub's
   devices.json (`/device/<id>/name?set=...`); each board shows an identity card (name, MAC, IP,
   fw) for 3 s at boot and on a BOOT hold. Say "Display 1/2" to the owner, never "#1/#2".
-  Open question: on Display 2, no press has ever registered as KEY (GPIO10); the owner's "key"
-  presses arrive as BOOT. Labels vs pins on its case not yet confirmed.
+  Buttons verified on BOTH boards 2026-10-04 (every press is logged as `hub: button X short|long`):
+  BOOT short = next app, BOOT hold = identity card, KEY short = zoom / city picker, KEY hold =
+  closest plane (+ info lookup), PWR = screen. Earlier "KEY does nothing" was a mix-up over
+  which button was pressed, not hardware.
   Opening the serial port can reset a board. Logs: a pyserial read inside the IDF container
   (the ports are root:dialout and snadboy is not in dialout).
 - Bedrock still runs the old `ghcr.io/snadboy/amoled-radar:c3eba80` (no host port); moving its

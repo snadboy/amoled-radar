@@ -314,6 +314,8 @@ void app_main(void)
     for (;;) {
         key_ev_t ev;
         if (keys_get(&ev, pdMS_TO_TICKS(200))) {
+            static const char *names[] = { "BOOT", "KEY", "PWR" };
+            ESP_LOGI(TAG, "button %s %s", names[ev.btn], ev.type == KEY_SHORT ? "short" : "long");
             if (ev.btn == BTN_PWR) screen(!s_on, true);
             else if (!s_on) screen(true, true);                 // any button wakes a dark screen
             else if (ev.btn == BTN_BOOT) { if (ev.type == KEY_SHORT) next_app(); else identify(4000); }
