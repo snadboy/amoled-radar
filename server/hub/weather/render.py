@@ -405,21 +405,6 @@ def hold_pill():
     d.text((HOLD_W // 2, 15), "Hold to turn off", font=fnt(15, True), fill=(231, 235, 240), anchor="mm")
     return img                              # device draws the fill bar at y+28..y+32
 
-def ha_entity(eid):
-    """(state, last_changed epoch) for any HA entity, or (None, None)."""
-    base = os.environ.get("HASS_SERVER", "").rstrip("/"); tok = os.environ.get("HASS_TOKEN", "")
-    if not (base and tok):
-        return None, None
-    try:
-        r = urllib.request.Request(base + "/api/states/" + eid, headers={"Authorization": "Bearer " + tok})
-        st = json.loads(urllib.request.urlopen(r, timeout=10).read())
-        from datetime import datetime
-        lc = datetime.fromisoformat(st["last_changed"].replace("Z", "+00:00")).timestamp()
-        return st["state"], lc
-    except Exception as e:
-        print("    HA %s unavailable (%s)" % (eid, str(e)[:40]))
-        return None, None
-
 _station_cache = {}
 
 def obs_reading(lat, lon):

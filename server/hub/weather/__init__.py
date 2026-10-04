@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""HTTP service feeding the ESP32-C6 AMOLED radar display, for several cities.
+"""Weather app: animated radar loops for several cities, plus a status strip.
 
 Two independent refresh loops, because they have very different natural rates:
 
@@ -8,26 +7,28 @@ Two independent refresh loops, because they have very different natural rates:
   * status -- every STATUS_REFRESH_S (60s), so the temperature is never up to ten
               minutes stale. This is why the strip is served apart from the frames.
 
-The device asks /cities.json once, shows the list when the KEY button is pressed,
-and for the chosen city polls /c/<id>/manifest.json. When loop_id changes it pulls
-the frames into flash and animates locally -- no per-frame WiFi. It can cache every
-city's loop, so switching cities is instant.
+The device lists the views, and for the chosen one polls its manifest. When loop_id
+changes it pulls loop.bin into flash and animates locally -- no per-frame WiFi. It
+can cache every view's loop, so switching cities is instant.
 
-Endpoints
-  /cities.json                 [{id, name, lat, lon, default}]
-  /c/<id>/manifest.json        loop_id, frame count, sizes, times, keys (real frames)
-  /c/<id>/frame/<n>.jpg        480x424 radar frame
-  /c/<id>/status.jpg           480x56 temperature / humidity / city strip
-  /healthz
+Endpoints (the old amoled-radar paths stay as aliases until both boards migrate:
+/cities.json, /c/<id>/..., /ui/picker.jpg, /ui/hold.jpg)
+  /weather/views.json              [{id, name, lat, lon, default}]
+  /weather/<id>/manifest.json      loop_id, frame count, sizes, times, keys (real frames)
+  /weather/<id>/loop.bin           RDL1 device loop (see render.encode_loop)
+  /weather/<id>/frame/<n>.jpg      480x424 radar frame
+  /weather/<id>/status.jpg         480x56 temperature / humidity / city strip
+  /weather/ui/picker.jpg?hl=&cur=  city picker
+  /weather/ui/hold.jpg             "Hold to turn off" pill
 """
-import hashlib, io, json, os, threading, time, urllib.parse
+import io, json, os, threading, time
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import render as R   # the renderer, used as a library
+from . import render as R
 
-PORT       = int(os.environ.get("PORT", "8080"))
+ID = "weather"
+
 RADAR_S    = int(os.environ.get("RADAR_REFRESH_S", "600"))
 STATUS_S   = int(os.environ.get("STATUS_REFRESH_S", "60"))
 N_FRAMES   = int(os.environ.get("RADAR_FRAMES", "12"))
@@ -71,14 +72,6 @@ DEFAULT_CITIES = [
                 ["Indianapolis", 39.7684, -86.1581], ["Fort Wayne", 41.0793, -85.1394],
                 ["Louisville", 38.2527, -85.7585]]},
 ]
-# Screen control for the device, decided here so the board never needs an HA token.
-OCC_ENTITY   = os.environ.get("RADAR_OCC_ENTITY", "binary_sensor.upstairs_office_lwr02_occupancy")
-LUX_ENTITY   = os.environ.get("RADAR_LUX_ENTITY", "sensor.upstairs_office_lwr02_illuminance")
-VACANT_OFF_S = int(os.environ.get("RADAR_VACANT_OFF_S", "300"))   # empty this long -> screen off
-BRIGHT_MIN     = int(os.environ.get("RADAR_BRIGHT_MIN", "140"))     # 0-255 panel brightness
-BRIGHT_MAX     = int(os.environ.get("RADAR_BRIGHT_MAX", "255"))
-BRIGHT_PER_LUX = float(os.environ.get("RADAR_BRIGHT_PER_LUX", "0.6"))
-FIRMWARE_DIR = os.environ.get("RADAR_FIRMWARE_DIR", os.path.join(R.CACHE, "firmware"))
 
 CITIES = json.loads(os.environ["RADAR_CITIES"]) if os.environ.get("RADAR_CITIES") else DEFAULT_CITIES
 BY_ID  = {c["id"]: c for c in CITIES}
@@ -224,118 +217,67 @@ def status_loop():
                 print("[status] %s FAILED: %s" % (c["id"], e), flush=True)
         time.sleep(STATUS_S)
 
-class Server(ThreadingHTTPServer):
-    daemon_threads = True
-    def handle_error(self, request, client_address):
-        # a client hanging up mid-response (health checks, a device losing WiFi)
-        # is routine -- don't dump a traceback into the container log for it
-        import sys
-        if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
-            return
-        super().handle_error(request, client_address)
+def views():
+    return [dict({k: c[k] for k in ("id", "name", "lat", "lon")}, default=bool(c.get("default")))
+            for c in CITIES]
 
-def device_state():
-    """What the panel should do. Occupancy off for VACANT_OFF_S -> off. Brightness
-    follows the room: the panel is never brighter than the room needs, which is the
-    second-biggest burn-in lever after not being on at all."""
-    occ, since = R.ha_entity(OCC_ENTITY)
-    lux_s, _ = R.ha_entity(LUX_ENTITY)
-    try: lux = float(lux_s)
-    except (TypeError, ValueError): lux = None
-    display, reason = "on", "occupied"
-    if occ == "off" and since and time.time() - since >= VACANT_OFF_S:
-        display, reason = "off", "room empty %d min" % ((time.time() - since) // 60)
-    elif occ is None:
-        reason = "occupancy unknown -- staying on"
-    # Floor raised from 50 to 140 after the owner found 69/255 (35 lx room) too dark.
-    # Occupancy blanking is the main burn-in protection; brightness is secondary.
-    lo, hi, k = BRIGHT_MIN, BRIGHT_MAX, BRIGHT_PER_LUX
-    bright = int((lo + hi) / 2) if lux is None else int(max(lo, min(hi, lo + lux * k)))
-    return {"display": display, "brightness": bright, "reason": reason,
-            "lux": lux, "occupancy": occ}
-
-def firmware_info():
-    try:
-        ver = open(os.path.join(FIRMWARE_DIR, "version.txt")).read().strip()
-        path = os.path.join(FIRMWARE_DIR, "firmware.bin")
-        data = open(path, "rb").read()
-        return {"version": ver, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-    except OSError:
-        return None
-
-class H(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-    def log_message(self, *a): pass
-    def _send(self, body, ctype="application/json", code=200):
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
-    def _json(self, obj, code=200):
-        self._send(json.dumps(obj).encode(), code=code)
-
-    def do_GET(self):
-        p = self.path.split("?")[0].rstrip("/") or "/"
-        q = dict(urllib.parse.parse_qsl(self.path.split("?", 1)[1])) if "?" in self.path else {}
-        if p == "/device.json":
-            return self._json(device_state())
-        if p == "/ui/picker.jpg":
-            try: hl = int(q.get("hl", "0"))
-            except ValueError: hl = 0
-            entries = [(c["id"], c["name"], _temps.get(c["id"])) for c in CITIES]
-            return self._send(_jpeg(R.picker_panel(entries, hl % len(entries), q.get("cur", ""))), "image/jpeg")
-        if p == "/ui/hold.jpg":
-            return self._send(_jpeg(R.hold_pill()), "image/jpeg")
-        if p == "/firmware.json":
-            fi = firmware_info()
-            return self._json(fi if fi else {"error": "no firmware published"}, 200 if fi else 404)
-        if p == "/firmware.bin":
-            try: return self._send(open(os.path.join(FIRMWARE_DIR, "firmware.bin"), "rb").read(), "application/octet-stream")
-            except OSError: return self._json({"error": "no firmware published"}, 404)
-        if p in ("/", "/cities.json"):
-            return self._json([dict({k: c[k] for k in ("id", "name", "lat", "lon")},
-                                    default=bool(c.get("default"))) for c in CITIES])
-        if p == "/healthz":
-            with _lock:
-                per = {cid: {"frames": len(st["frames"]), "status": bool(st["status"]),
-                             "radar_err": st["radar_err"], "status_err": st["status_err"]}
-                       for cid, st in _state.items()}
-            ok = all(v["frames"] and v["status"] for v in per.values())
-            return self._json({"ok": ok, "cities": per}, 200 if ok else 503)
-
-        parts = p.split("/")          # ['', 'c', '<id>', ...]
-        if len(parts) >= 4 and parts[1] == "c" and parts[2] in BY_ID:
-            with _lock: st = dict(_state[parts[2]])
-            rest = "/".join(parts[3:])
-            if rest == "manifest.json":
-                return self._json({
-                    "city": parts[2], "loop_id": st["loop_id"], "frames": len(st["frames"]),
-                    "w": R.PANEL, "h": R.PANEL, "view_h": R.VIEW_H, "status_h": R.STATUS_H,
-                    "built": st["built"], "status_built": st["status_built"],
-                    "sizes": [len(f) for f in st["frames"]], "times": st["times"], "keys": st["keys"],
-                    "tweens_per_10min": TWEENS, "tween_mode": TWEEN_MODE,
-                    "clear_air_filtered": st.get("clear_air_filtered"),
-                    "qc_masked": st.get("qc_masked"),       # real frames masked by NOAA QC
-                    "loop_bin_size": len(st.get("blob") or b""), "tweens_used": st.get("tweens_used"),
-                    "radar_err": st["radar_err"], "status_err": st["status_err"]})
-            if rest == "loop.bin":                  # device format (see render.encode_loop)
-                if not st.get("blob"): return self._json({"error": "not ready"}, 503)
-                return self._send(st["blob"], "application/octet-stream")
-            if rest == "status.jpg":
-                if not st["status"]: return self._json({"error": "not ready"}, 503)
-                return self._send(st["status"], "image/jpeg")
-            if rest.startswith("frame/") and rest.endswith(".jpg"):
-                try: i = int(rest[len("frame/"):-4])
-                except ValueError: return self._json({"error": "bad index"}, 400)
-                if not (0 <= i < len(st["frames"])): return self._json({"error": "out of range"}, 404)
-                return self._send(st["frames"][i], "image/jpeg")
-        self._json({"error": "not found"}, 404)
-
-if __name__ == "__main__":
+def start():
     threading.Thread(target=radar_loop, daemon=True).start()
     threading.Thread(target=status_loop, daemon=True).start()
-    print("serving on :%d  cities=%s  (radar every %ds, status every %ds)"
-          % (PORT, ",".join(c["id"] for c in CITIES), RADAR_S, STATUS_S), flush=True)
-    Server(("0.0.0.0", PORT), H).serve_forever()
+    print("[weather] cities=%s  (radar every %ds, status every %ds)"
+          % (",".join(c["id"] for c in CITIES), RADAR_S, STATUS_S), flush=True)
+
+def health():
+    with _lock:
+        per = {cid: {"frames": len(st["frames"]), "status": bool(st["status"]),
+                     "radar_err": st["radar_err"], "status_err": st["status_err"]}
+               for cid, st in _state.items()}
+    return all(v["frames"] and v["status"] for v in per.values()), per
+
+def _view(h, vid, rest):
+    with _lock: st = dict(_state[vid])
+    if rest == "manifest.json":
+        return h.json({
+            "city": vid, "loop_id": st["loop_id"], "frames": len(st["frames"]),
+            "w": R.PANEL, "h": R.PANEL, "view_h": R.VIEW_H, "status_h": R.STATUS_H,
+            "built": st["built"], "status_built": st["status_built"],
+            "sizes": [len(f) for f in st["frames"]], "times": st["times"], "keys": st["keys"],
+            "tweens_per_10min": TWEENS, "tween_mode": TWEEN_MODE,
+            "clear_air_filtered": st.get("clear_air_filtered"),
+            "qc_masked": st.get("qc_masked"),       # real frames masked by NOAA QC
+            "loop_bin_size": len(st.get("blob") or b""), "tweens_used": st.get("tweens_used"),
+            "radar_err": st["radar_err"], "status_err": st["status_err"]})
+    if rest == "loop.bin":                  # device format (see render.encode_loop)
+        if not st.get("blob"): return h.json({"error": "not ready"}, 503)
+        return h.send(st["blob"], "application/octet-stream")
+    if rest == "status.jpg":
+        if not st["status"]: return h.json({"error": "not ready"}, 503)
+        return h.send(st["status"], "image/jpeg")
+    if rest.startswith("frame/") and rest.endswith(".jpg"):
+        try: i = int(rest[len("frame/"):-4])
+        except ValueError: return h.json({"error": "bad index"}, 400)
+        if not (0 <= i < len(st["frames"])): return h.json({"error": "out of range"}, 404)
+        return h.send(st["frames"][i], "image/jpeg")
+    return False
+
+def _ui(h, name, q):
+    if name == "picker.jpg":
+        try: hl = int(q.get("hl", "0"))
+        except ValueError: hl = 0
+        entries = [(c["id"], c["name"], _temps.get(c["id"])) for c in CITIES]
+        return h.send(_jpeg(R.picker_panel(entries, hl % len(entries), q.get("cur", ""))), "image/jpeg")
+    if name == "hold.jpg":
+        return h.send(_jpeg(R.hold_pill()), "image/jpeg")
+    return False
+
+def handle(h, p, q):
+    """Serve a weather path (new or legacy); False if it isn't one."""
+    parts = p.split("/")
+    if p in ("/weather/views.json", "/cities.json"):
+        return h.json(views())
+    if (len(parts) == 4 and parts[1:3] == ["weather", "ui"]) or (len(parts) == 3 and parts[1] == "ui"):
+        return _ui(h, parts[-1], q)
+    # /weather/<id>/... and legacy /c/<id>/...
+    if len(parts) >= 4 and parts[1] in ("weather", "c") and parts[2] in BY_ID:
+        return _view(h, parts[2], "/".join(parts[3:]))
+    return False

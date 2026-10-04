@@ -1,7 +1,7 @@
 services:
-  amoled-radar:
-    image: ghcr.io/snadboy/amoled-radar:latest
-    container_name: amoled-radar
+  display-hub:
+    image: ghcr.io/snadboy/display-hub:latest
+    container_name: display-hub
     restart: unless-stopped
     env_file: .env
     environment:
@@ -10,13 +10,16 @@ services:
       RADAR_REFRESH_S: "600"    # RainViewer publishes a new frame every 10 min
       STATUS_REFRESH_S: "60"    # keep the outdoor reading fresh — this is why the
                                 # status strip is served separately from the frames
+    # Devices reach the hub by LAN IP (they can't join the tailnet); humans use the VIP.
+    ports:
+      - "8098:8080"
     volumes:
-      - amoled-radar-cache:/cache
+      - display-hub-cache:/cache
     labels:
       - "docktail.service.enable=true"
-      - "docktail.service.name=radar"
+      - "docktail.service.name=displays"
       - "docktail.service.port=8080"
       - "docktail.service.service-port=443"
 
 volumes:
-  amoled-radar-cache:
+  display-hub-cache:

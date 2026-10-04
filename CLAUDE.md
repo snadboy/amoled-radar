@@ -137,7 +137,7 @@ while `bringup-buttons` logged GPIO 6/9/10/14/18 and the AXP2101 IRQ register.
 
 ## Cities and the picker
 
-Three views, defined in `serve.py` (`DEFAULT_CITIES`; override with `RADAR_CITIES` JSON).
+Four views, defined in `server/hub/weather/__init__.py` (`DEFAULT_CITIES`; override with `RADAR_CITIES` JSON).
 City centres are public coordinates, so no home position is stored anywhere.
 
 | id | City | Centre | Temp/humidity source |
@@ -173,7 +173,7 @@ The status strip now carries the city name (centre, above the time).
 
 **Local time per city.** Each city has a `tz` (Canton is `America/Detroit`). The
 container runs on UTC, and `time.strftime()` originally printed UTC -- Canton read
-3:00 PM at 11:00 AM local. All clocks go through `serve.clock(epoch, city)`.
+3:00 PM at 11:00 AM local. All clocks go through `weather.clock(epoch, city)`.
 
 **Progress bar** (burned into each radar frame, `render.progress_bar`): loop start time
 left, latest time right, amber fill + playhead at this frame's position. Dark gradient band
@@ -279,11 +279,13 @@ both sit in sheltered spaces (three-season room, garage).
 
 ## Server
 
-`server/render.py` — composites frames; run it with `HASS_SERVER`/`HASS_TOKEN` set.
+`server/hub/weather/render.py` — composites frames; run it with `HASS_SERVER`/`HASS_TOKEN` set.
 
 ```bash
 cd server
-RADAR_OUT=./out RADAR_CACHE=./cache RADAR_FRAMES=12 python3 render.py
+RADAR_OUT=./out RADAR_CACHE=./cache RADAR_FRAMES=12 python3 -m hub.weather.render
+# the whole service:
+HUB_CACHE=./cache python3 -m hub
 ```
 
 Env: `RADAR_LAT`/`RADAR_LON` (centre), `RADAR_FRAMES`, `RADAR_OUT`, `RADAR_CACHE`,
@@ -291,8 +293,11 @@ Env: `RADAR_LAT`/`RADAR_LON` (centre), `RADAR_FRAMES`, `RADAR_OUT`, `RADAR_CACHE
 
 Output: ~24–45 KB JPEG per 480×480 frame (bigger when there's heavy precipitation).
 
-Endpoints are per city: `/cities.json`, `/c/<id>/manifest.json`, `/c/<id>/frame/<n>.jpg`,
-`/c/<id>/status.jpg`, `/healthz`.
+Endpoints (hub layout, step 1 done 2026-10-04): core `/device/hello`, `/device/<id>/state`,
+`/devices.json`, `/firmware.{json,bin}`, `/healthz`; weather `/weather/views.json`,
+`/weather/<id>/{manifest.json,loop.bin,status.jpg,frame/<n>.jpg}`, `/weather/ui/{picker,hold}.jpg`.
+Legacy aliases kept for the running firmware: `/cities.json`, `/c/<id>/...`, `/ui/...`, `/device.json`
+(legacy devices show in `/devices.json` as `ip:<addr>`).
 
 ⚠️ The basemap cache key includes the location (`base_z9_<lat>_<lon>_o<orbit>.png`). It was
 once plain `base_z9.png`, which every city would have silently shared.
