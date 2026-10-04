@@ -8,7 +8,7 @@
 
 static const char *TAG = "store";
 #define MAGIC   0x52445231u     // "RDR1"
-#define VERSION 3u      // 3 = hub bundles in 6 slots (2 was radar RDL1 in 5 slots; re-downloaded)
+#define VERSION 4u      // 4 = hub bundles in 6 slots, ordered by seq (2 = radar RDL1 in 5 slots; re-downloaded)
 
 static const esp_partition_t *s_part;
 static size_t s_slot_size;
@@ -16,6 +16,7 @@ static SemaphoreHandle_t s_mx;
 static loop_hdr_t s_hdr[STORE_SLOTS];          // in-RAM copy of every slot's header
 static bool s_valid[STORE_SLOTS];
 static int s_writing = -1, s_pinned = -1;
+static uint32_t s_seq;              // highest seq committed so far
 static char s_views[8][16];
 static int s_nviews = -1;          // -1 = not told yet: treat every view as live
 static esp_partition_mmap_handle_t s_mh[STORE_SLOTS];
@@ -33,8 +34,11 @@ esp_err_t store_init(void)
         esp_partition_read(s_part, base(i), &s_hdr[i], sizeof(loop_hdr_t));
         s_valid[i] = s_hdr[i].magic == MAGIC && s_hdr[i].version == VERSION && s_hdr[i].nframes > 0
                      && s_hdr[i].nframes <= STORE_MAX_FRAMES;
-        if (s_valid[i]) ESP_LOGI(TAG, "slot %d: %s loop %lu, %u frames", i, s_hdr[i].view,
-                                 (unsigned long)s_hdr[i].loop_id, s_hdr[i].nframes);
+        if (s_valid[i]) {
+            if (s_hdr[i].seq > s_seq) s_seq = s_hdr[i].seq;
+            ESP_LOGI(TAG, "slot %d: %s id %08lx, %u sections, seq %lu", i, s_hdr[i].view,
+                     (unsigned long)s_hdr[i].loop_id, s_hdr[i].nframes, (unsigned long)s_hdr[i].seq);
+        }
     }
     ESP_LOGI(TAG, "%d slots of %u KB", STORE_SLOTS, (unsigned)(s_slot_size / 1024));
     return ESP_OK;
@@ -48,7 +52,7 @@ static int newest(const char *view)
     int best = -1;
     for (int i = 0; i < STORE_SLOTS; i++)
         if (s_valid[i] && strcmp(s_hdr[i].view, view) == 0 &&
-            (best < 0 || s_hdr[i].loop_id > s_hdr[best].loop_id)) best = i;
+            (best < 0 || s_hdr[i].seq > s_hdr[best].seq)) best = i;
     return best;
 }
 
@@ -114,6 +118,9 @@ esp_err_t store_read(int slot, uint32_t off, void *buf, size_t n)
 esp_err_t store_commit(int slot, loop_hdr_t *hdr)
 {
     hdr->magic = MAGIC; hdr->version = VERSION;
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    hdr->seq = ++s_seq;
+    xSemaphoreGive(s_mx);
     esp_err_t e = esp_partition_write(s_part, base(slot), hdr, sizeof(*hdr));   // header last
     xSemaphoreTake(s_mx, portMAX_DELAY);
     if (e == ESP_OK) { s_hdr[slot] = *hdr; s_valid[slot] = true; }

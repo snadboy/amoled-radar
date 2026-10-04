@@ -536,7 +536,9 @@ static esp_err_t to_flash(void *ctx, const uint8_t *d, size_t n)
 
 static uint32_t id32(const char *bundle_id)
 {
-    uint32_t v = (uint32_t)strtoul(bundle_id, NULL, 16);   // first 8 hex digits are plenty
+    char head[9];                         // first 8 hex digits are plenty; strtoul on all 16
+    strlcpy(head, bundle_id, sizeof(head));   // saturates at 0xffffffff, so every id would match
+    uint32_t v = (uint32_t)strtoul(head, NULL, 16);
     return v ? v : 1;
 }
 
@@ -652,6 +654,8 @@ static void fetch_states(void)
     s_batch.count = count;
     s_batch.server_time = t;
     s_batch.ready = true;
+    static bool logged;
+    if (!logged) { logged = true; ESP_LOGI(TAG, "first states: seq %lu, %d aircraft, hub status %d", (unsigned long)seq, count, s_status); }
 }
 
 static void str_item(char *dst, size_t n, const cJSON *o, const char *key)
@@ -687,6 +691,7 @@ static void fetch_info(void)
         }
         cJSON_Delete(j);
     }
+    ESP_LOGI(TAG, "info %06lx %s: %s, route %s-%s", (unsigned long)icao, cs, f.type, f.has_route ? f.origin.iata : "?", f.has_route ? f.dest.iata : "?");
     xSemaphoreTake(s_info_mx, portMAX_DELAY);
     if (s_info.icao == icao && !s_req.pending) s_info = f;   // unless something else was tapped meanwhile
     xSemaphoreGive(s_info_mx);

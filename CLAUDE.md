@@ -18,8 +18,19 @@ One server for every small display: weather radar today, aircraft next (ported f
   `boards/ws_c6_216.c` (+CST9220 touch, BOOT/KEY GPIO, PWR via AXP2101 IRQ 0x41/0x49 bit3), LVGL
   in the board's DMA strips (`core/ui.c`), aircraft app (`apps/aircraft.c`, port of radar_ui.cpp).
   Store: 6 slots, keys `a:<view>` / `w:<view>`; mapped slots are never erased.
-  **Not yet flashed** -- needs board #2 on USB (`/dev/ttyACM0` via the faraday passthrough).
-  Build for the dev hub: `HUB_SERVER_URL=http://192.168.86.220:8098 ./build.sh && ./flash.sh`.
+  **Flashed on board #2 2026-10-04** (192.168.86.221): boots, registers with the hub, caches the
+  1.35 MB map in 3.7 s, polls states. Touch/buttons/visuals still to be checked by eye.
+  Build for the dev hub: `HUB_SERVER_URL=http://192.168.86.220:8098 ./build.sh`, then flash by
+  SERIAL, never by ttyACM number (both boards are on sdevs):
+  `PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
+- **USB on sdevs** (pve-faraday VM 121): `usb0: host=303a:1001` (vendor:product -- with two
+  identical boards it grabs whichever comes first) and `usb1: host=3-1.3` (port, added 2026-10-04).
+  | Board | USB serial = MAC | Host port | sdevs | IP |
+  |---|---|---|---|---|
+  | #1 weather (radar fw) | D4:05:92:B8:F9:0C | 3-1.4.1 | /dev/ttyACM0 | .227 |
+  | #2 aircraft (hub fw) | 20:6E:F1:16:A1:00 | 3-1.3 | /dev/ttyACM1 | .221 |
+  Opening the serial port can reset a board. Logs: a pyserial read inside the IDF container
+  (the ports are root:dialout and snadboy is not in dialout).
 - Bedrock still runs the old `ghcr.io/snadboy/amoled-radar:c3eba80` (no host port); moving its
   stack to `display-hub` (port 8098, new volume -> republish firmware) is not done.
 - The Arduino aircraft board still polls OpenSky itself on the same account, so credits are

@@ -22,6 +22,7 @@ typedef struct {
     uint32_t off[STORE_MAX_FRAMES];
     uint32_t len[STORE_MAX_FRAMES];
     uint8_t  key[STORE_MAX_FRAMES];          // 1 = real radar frame, 0 = in-between
+    uint32_t seq;                            // set by store_commit: newest wins (ids are hashes, not ordered)
 } loop_hdr_t;
 
 esp_err_t store_init(void);
