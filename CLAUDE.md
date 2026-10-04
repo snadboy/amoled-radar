@@ -6,10 +6,18 @@ One server for every small display: weather radar today, aircraft next (ported f
 - Repo: https://github.com/snadboy/display-hub (renamed from amoled-radar 2026-10-04; old URL redirects)
 - Decisions: evolve this repo; buttons PWR = screen, BOOT = next app, KEY = app action;
   bedrock host port **8098**, DockTail VIP **`displays`**.
-- **Next:** design step 1 -- restructure `server/` into `server/hub/`, keeping `/c/<id>/...`,
-  `/device.json` aliases. Image/CI/compose still say `amoled-radar` until then.
-- Deployment today: bedrock runs `ghcr.io/snadboy/amoled-radar:c3eba80` (old, no host port);
-  the board uses the sdevs dev container `radar-dev` on :8098.
+- **Step 1 DONE** (6981bc2): `server/hub/` package, legacy paths aliased. `radar-dev` on sdevs
+  (:8098) runs `display-hub:dev`; the weather board (192.168.86.227) is served by it.
+- **Step 2 DONE** (aircraft server): `server/hub/aircraft/` -- OpenSky poller (only while a device
+  fetched states in the last 2 min), adsbdb/hexdb lookups with prefetch, ABN1 basemap bundles,
+  AST1 binary states, previews. Verified on a test container (:8099): 108 aircraft, bundle centre
+  matches the Arduino build's HOME_MX/MY, previews align. Needs `OPENSKY_CLIENT_*` and
+  `AIR_LAT/AIR_LON` (exact home, NOT in the public repo) in `.env`.
+- **Next:** step 3 -- ESP-IDF firmware: LVGL + CST9220 touch + app interface + aircraft app.
+- Bedrock still runs the old `ghcr.io/snadboy/amoled-radar:c3eba80` (no host port); moving its
+  stack to `display-hub` (port 8098, new volume -> republish firmware) is not done.
+- The Arduino aircraft board still polls OpenSky itself on the same account, so credits are
+  spent twice while the hub is also polling.
 
 The weather notes below predate the hub and still describe the running system.
 

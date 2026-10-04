@@ -6,10 +6,10 @@ Every app module provides ID, views(), start(), health() and handle(h, path, que
 import json, os, sys, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import core, weather
+from . import aircraft, core, weather
 
 PORT = int(os.environ.get("PORT", "8080"))
-APPS = [weather]            # first is the default app
+APPS = [weather, aircraft]  # first is the default app
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True

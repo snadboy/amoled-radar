@@ -35,16 +35,20 @@ humans: a page listing registered devices with previews.
 | `GET /device/<id>/state` | Screen on/off + brightness for every app (was `/device.json`; replaces opensky's hard-coded night dimming). |
 | `GET /firmware.json`, `/firmware.bin` | OTA, unchanged. |
 | `/weather/<view>/manifest.json`, `loop.bin`, `status.jpg` | Was `/c/<id>/...`. Old paths stay as aliases until both boards are migrated. |
-| `/aircraft/<view>/bundle.bin` | Basemaps for every zoom level in one bundle, rings and towns baked in, sized to the profile's shape and safe area. |
-| `/aircraft/<view>/states.bin?since=<seq>` | Fixed 32-byte binary records, pre-filtered to radius + airborne. 304 if unchanged. `?fmt=json` for humans. |
-| `/aircraft/info/<icao>?cs=&lat=&lon=` | adsbdb, hexdb fallback, route-fits-path check, shared cache. Small JSON. |
-| `/aircraft/<view>/preview.png?profile=` | What a device should show. Verify the server before touching firmware. |
+| `/aircraft/<view>/manifest.json?w=&h=&r=` | Bundle id and size, centre, per-level scale and rings. Re-download the bundle when `bundle_id` changes. |
+| `/aircraft/<view>/bundle.bin?w=&h=&r=` | ABN1: basemaps for every zoom level in one bundle, rings, towns and home mark baked in, sized to the profile's shape and safe area. Raw little-endian RGB565 so LVGL can draw straight from mapped flash. Format in `server/hub/aircraft/basemap.py`. |
+| `/aircraft/<view>/states.bin?since=<seq>` | AST1: 20-byte header + 48-byte records, pre-filtered to radius + airborne. 304 if unchanged. `states.json` for humans. Format in `server/hub/aircraft/__init__.py`. |
+| `/aircraft/info/<icao>?cs=&lat=&lon=` (cs/lat/lon default to the latest state) | adsbdb, hexdb fallback, route-fits-path check, shared cache. Small JSON. |
+| `/aircraft/<view>/preview.png?w=&h=&r=&level=` | What a device should show. Verify the server before touching firmware. |
 
 - **One OpenSky poll per view, regardless of device count.** Polling runs only while some
   device fetched `states` in the last ~2 min (replaces the device's `g_paused`); the
   4,000-credit daily budget is shared.
-- **Lookups prefetched** for planes in view; each `states` record flags "info cached", so a
-  tap is one LAN round trip to a warm cache.
+- **Lookups prefetched** for planes in view (one request/s); each `states` record flags "info
+  cached" and "route known", so a tap is one LAN round trip to a warm cache. Route candidates
+  are cached per callsign and vetted against the plane's current position on every request.
+- **The UI-pill boxes** that town labels avoid (`basemap.ui_boxes`) are a contract with the
+  firmware layout.
 - **Source behind an interface**, so a local ADS-B receiver could replace OpenSky later.
 - States are binary, not JSON: cJSON on ~200 aircraft would take ~150 KB of the C6's heap.
 
