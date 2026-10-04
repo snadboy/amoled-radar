@@ -38,8 +38,9 @@ QUALITY    = int(os.environ.get("RADAR_JPEG_QUALITY", "86"))
 # own decode rate as too slow can play real frames only.
 TWEENS     = int(os.environ.get("RADAR_TWEENS", "3"))
 TWEEN_MODE = os.environ.get("RADAR_TWEEN_MODE", "motion")
-# Largest device-format loop the board's flash slot holds (5 slots of 2.375 MB, 4 KB header).
-LOOP_BUDGET = int(os.environ.get("RADAR_LOOP_BUDGET", str(2400000)))
+# Largest device-format loop a board's flash slot holds. Hub firmware: 6 slots, 2,068,480
+# bytes of data each (reported as "slot" in /device/hello); the radar firmware's were bigger.
+LOOP_BUDGET = int(os.environ.get("RADAR_LOOP_BUDGET", str(2060000)))
 # Clear-air echo (RainViewer's faint tan/grey band) is filtered on city views only
 # when the city is at least this warm. Snow can't reach the ground at 40 F, so the
 # band can't be snow then; below it, the band is kept in case it is light snow.

@@ -31,8 +31,8 @@
 
 static const char *TAG = "hub";
 
-extern const app_t APP_AIRCRAFT;
-static const app_t *const APPS[] = { &APP_AIRCRAFT };
+extern const app_t APP_WEATHER, APP_AIRCRAFT;
+static const app_t *const APPS[] = { &APP_WEATHER, &APP_AIRCRAFT };
 #define NAPPS ((int)(sizeof(APPS) / sizeof(APPS[0])))
 
 #define URL_MAX       256
@@ -61,10 +61,17 @@ void hub_drawn(void)
 }
 
 // ---------------------------------------------------------------- NVS
-static void nvs_put(const char *k, const char *v)
+void hub_nvs_put(const char *k, const char *v)
 {
     nvs_handle_t h;
     if (nvs_open("hub", NVS_READWRITE, &h) == ESP_OK) { nvs_set_str(h, k, v); nvs_commit(h); nvs_close(h); }
+}
+
+bool hub_nvs_get(const char *k, char *out, size_t sz)
+{
+    nvs_handle_t h; bool ok = false;
+    if (nvs_open("hub", NVS_READONLY, &h) == ESP_OK) { ok = nvs_get_str(h, k, out, &sz) == ESP_OK; nvs_close(h); }
+    return ok;
 }
 
 static char *nvs_dup(const char *k)
@@ -89,7 +96,7 @@ static cJSON *hello(void)
         uint8_t *js; size_t len;
         if (net_get(url, &js, &len, 16 * 1024) == ESP_OK) {
             cJSON *j = cJSON_Parse((char *)js);
-            if (cJSON_IsArray(cJSON_GetObjectItem(j, "apps"))) { nvs_put("hello", (char *)js); free(js); return j; }
+            if (cJSON_IsArray(cJSON_GetObjectItem(j, "apps"))) { hub_nvs_put("hello", (char *)js); free(js); return j; }
             cJSON_Delete(j); free(js);
         }
         vTaskDelay(pdMS_TO_TICKS(2000));
@@ -156,8 +163,8 @@ static void switch_to(int i, bool announce)
     if (s_cur >= 0) APPS[s_cur]->leave();
     s_cur = i;
     APPS[i]->enter();
-    nvs_put("app", APPS[i]->id);
-    if (announce) toast(APPS[i]->name);
+    hub_nvs_put("app", APPS[i]->id);
+    if (announce && !APPS[i]->raw) toast(APPS[i]->name);   // LVGL is paused under a raw app
     ESP_LOGI(TAG, "app -> %s", APPS[i]->id);
 }
 
@@ -166,7 +173,7 @@ static void next_app(void)
     for (int k = 1; k <= NAPPS; k++) {
         int i = (s_cur + k) % NAPPS;
         if (s_enabled[i]) {
-            if (i == s_cur) toast(APPS[i]->name);       // only one app: still acknowledge BOOT
+            if (i == s_cur) { if (!APPS[i]->raw) toast(APPS[i]->name); }   // only one app: still acknowledge BOOT
             else switch_to(i, true);
             return;
         }
@@ -206,7 +213,7 @@ static void screen(bool on, bool manual)
         s_manual_off = false;
         if (manual && !s_srv_on) s_manual_on_until = ms() + MANUAL_ON_MS;
         s_applied_bright = -1; apply_brightness();
-        ui_pause(false);
+        if (!APPS[s_cur]->raw) ui_pause(false);
         APPS[s_cur]->screen(true);
     }
     ESP_LOGI(TAG, "screen %s (%s)", on ? "on" : "off", manual ? "PWR" : on ? "room occupied" : "room empty");

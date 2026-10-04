@@ -25,8 +25,8 @@ One server for every small display: weather radar today, aircraft next (ported f
   Build for the dev hub: `HUB_SERVER_URL=http://192.168.86.220:8098 ./build.sh`, then flash by
   SERIAL, never by ttyACM number (both boards are on sdevs):
   `PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
-- **USB on sdevs** (pve-faraday VM 121): `usb0: host=303a:1001` (vendor:product -- with two
-  identical boards it grabs whichever comes first) and `usb1: host=3-1.3` (port, added 2026-10-04).
+- **USB on sdevs** (pve-faraday VM 121): both pinned by physical port 2026-10-04 --
+  `usb0: host=3-1.4.1` (weather board), `usb1: host=3-1.3` (aircraft board).
   | Board | USB serial = MAC | Host port | sdevs | IP |
   |---|---|---|---|---|
   | #1 weather (radar fw) | D4:05:92:B8:F9:0C | 3-1.4.1 | /dev/ttyACM0 | .227 |
