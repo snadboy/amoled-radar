@@ -1,8 +1,25 @@
-# amoled-radar
+# display-hub (formerly amoled-radar)
+
+One server for every small display: weather radar today, aircraft next (ported from
+`~/projects/git/opensky-amoled`, local-only repo). **Design agreed 2026-10-04: `docs/DESIGN.md`.**
+
+- Repo: https://github.com/snadboy/display-hub (renamed from amoled-radar 2026-10-04; old URL redirects)
+- Decisions: evolve this repo; buttons PWR = screen, BOOT = next app, KEY = app action;
+  bedrock host port **8098**, DockTail VIP **`displays`**.
+- **Next:** design step 1 -- restructure `server/` into `server/hub/`, keeping `/c/<id>/...`,
+  `/device.json` aliases. Image/CI/compose still say `amoled-radar` until then.
+- Deployment today: bedrock runs `ghcr.io/snadboy/amoled-radar:c3eba80` (old, no host port);
+  the board uses the sdevs dev container `radar-dev` on :8098.
+
+The weather notes below predate the hub and still describe the running system.
+
+---
+
+# amoled-radar (weather)
 
 Animated weather radar + outdoor temp/humidity on a **Waveshare ESP32-C6-Touch-AMOLED-2.16**.
 
-**Status:** server-side renderer working and validated against live data. Firmware not started.
+**Status:** server and firmware running on board #1 (see Firmware section).
 **Started:** 2026-10-02
 
 ---
