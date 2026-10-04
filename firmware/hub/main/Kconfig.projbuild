@@ -1,0 +1,24 @@
+menu "Display hub"
+    config HUB_WIFI_SSID
+        string "WiFi SSID (2.4 GHz)"
+        default ""
+        help
+            Filled in by build.sh from RADAR_WIFI_SSID in the shareables .env.
+            Never commit a value here.
+    config HUB_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+    config HUB_SERVER_URL
+        string "Hub base URL (LAN; the board can't use Tailscale)"
+        default "http://192.168.86.135:8098"
+    config HUB_FW_CHANNEL
+        string "OTA channel (/firmware/<channel>.json on the hub)"
+        default "hub"
+    config HUB_TZ
+        string "Local time zone (POSIX TZ) for the clock"
+        default "CST6CDT,M3.2.0,M11.1.0"
+    config HUB_BRIGHTNESS
+        int "Boot brightness (1-255) until the hub says otherwise"
+        range 1 255
+        default 140
+endmenu

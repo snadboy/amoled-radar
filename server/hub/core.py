@@ -4,7 +4,8 @@
                          register a device profile; returns its apps and views
   /device/<id>/state     screen on/off + brightness (same rules for every app)
   /devices.json          registered devices, for humans
-  /firmware.json, /firmware.bin   OTA
+  /firmware.json, /firmware.bin   OTA, legacy channel (amoled-radar firmware)
+  /firmware/<channel>.json|.bin   OTA per channel (hub firmware: "hub")
   /device.json           legacy alias of /device/<id>/state (amoled-radar firmware)
 """
 import hashlib, json, os, re, threading, time
@@ -67,10 +68,15 @@ def device_state():
     return {"display": display, "brightness": bright, "reason": reason,
             "lux": lux, "occupancy": occ}
 
-def firmware_info():
+def _fw_dir(channel):
+    """The legacy root channel is FIRMWARE_DIR itself (amoled-radar firmware); named
+    channels live below it, so a build can't reach boards it isn't meant for."""
+    return FIRMWARE_DIR if channel is None else os.path.join(FIRMWARE_DIR, channel)
+
+def firmware_info(channel=None):
     try:
-        ver = open(os.path.join(FIRMWARE_DIR, "version.txt")).read().strip()
-        data = open(os.path.join(FIRMWARE_DIR, "firmware.bin"), "rb").read()
+        ver = open(os.path.join(_fw_dir(channel), "version.txt")).read().strip()
+        data = open(os.path.join(_fw_dir(channel), "firmware.bin"), "rb").read()
         return {"version": ver, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
     except OSError:
         return None
@@ -94,10 +100,13 @@ def handle(h, p, q, apps):
         return h.json(device_state())
     if p == "/devices.json":
         with _lock: return h.json(_devices)
-    if p == "/firmware.json":
-        fi = firmware_info()
-        return h.json(fi if fi else {"error": "no firmware published"}, 200 if fi else 404)
-    if p == "/firmware.bin":
-        try: return h.send(open(os.path.join(FIRMWARE_DIR, "firmware.bin"), "rb").read(), "application/octet-stream")
+    # /firmware.{json,bin} (legacy root channel) and /firmware/<channel>.{json,bin}
+    m = re.match(r"^/firmware(?:/([a-z0-9-]{1,24}))?\.(json|bin)$", p)
+    if m:
+        channel, ext = m.groups()
+        if ext == "json":
+            fi = firmware_info(channel)
+            return h.json(fi if fi else {"error": "no firmware published"}, 200 if fi else 404)
+        try: return h.send(open(os.path.join(_fw_dir(channel), "firmware.bin"), "rb").read(), "application/octet-stream")
         except OSError: return h.json({"error": "no firmware published"}, 404)
     return False

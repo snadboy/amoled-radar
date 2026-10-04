@@ -13,7 +13,13 @@ One server for every small display: weather radar today, aircraft next (ported f
   AST1 binary states, previews. Verified on a test container (:8099): 108 aircraft, bundle centre
   matches the Arduino build's HOME_MX/MY, previews align. Needs `OPENSKY_CLIENT_*` and
   `AIR_LAT/AIR_LON` (exact home, NOT in the public repo) in `.env`.
-- **Next:** step 3 -- ESP-IDF firmware: LVGL + CST9220 touch + app interface + aircraft app.
+- **Step 3 IN PROGRESS** (`firmware/hub/`, builds: 1.51 MB of the 2 MB app slot): core (hello,
+  screen policy, PWR/BOOT, OTA channel `hub` at `/firmware/hub.{json,bin}`), board
+  `boards/ws_c6_216.c` (+CST9220 touch, BOOT/KEY GPIO, PWR via AXP2101 IRQ 0x41/0x49 bit3), LVGL
+  in the board's DMA strips (`core/ui.c`), aircraft app (`apps/aircraft.c`, port of radar_ui.cpp).
+  Store: 6 slots, keys `a:<view>` / `w:<view>`; mapped slots are never erased.
+  **Not yet flashed** -- needs board #2 on USB (`/dev/ttyACM0` via the faraday passthrough).
+  Build for the dev hub: `HUB_SERVER_URL=http://192.168.86.220:8098 ./build.sh && ./flash.sh`.
 - Bedrock still runs the old `ghcr.io/snadboy/amoled-radar:c3eba80` (no host port); moving its
   stack to `display-hub` (port 8098, new volume -> republish firmware) is not done.
 - The Arduino aircraft board still polls OpenSky itself on the same account, so credits are
