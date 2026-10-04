@@ -6,24 +6,31 @@ One server for every small display: weather radar today, aircraft next (ported f
 - Repo: https://github.com/snadboy/display-hub (renamed from amoled-radar 2026-10-04; old URL redirects)
 - Decisions: evolve this repo; buttons PWR = screen, BOOT = next app, KEY = app action;
   bedrock host port **8098**, DockTail VIP **`displays`**.
-- **Step 1 DONE** (6981bc2): `server/hub/` package, legacy paths aliased. `radar-dev` on sdevs
-  (:8098) runs `display-hub:dev`; the weather board (192.168.86.227) is served by it.
-- **Step 2 DONE** (aircraft server): `server/hub/aircraft/` -- OpenSky poller (only while a device
-  fetched states in the last 2 min), adsbdb/hexdb lookups with prefetch, ABN1 basemap bundles,
-  AST1 binary states, previews. Verified on a test container (:8099): 108 aircraft, bundle centre
-  matches the Arduino build's HOME_MX/MY, previews align. Needs `OPENSKY_CLIENT_*` and
-  `AIR_LAT/AIR_LON` (exact home, NOT in the public repo) in `.env`.
-- **Step 3 IN PROGRESS** (`firmware/hub/`, builds: 1.51 MB of the 2 MB app slot): core (hello,
-  screen policy, PWR/BOOT, OTA channel `hub` at `/firmware/hub.{json,bin}`), board
-  `boards/ws_c6_216.c` (+CST9220 touch, BOOT/KEY GPIO, PWR via AXP2101 IRQ 0x41/0x49 bit3), LVGL
-  in the board's DMA strips (`core/ui.c`), aircraft app (`apps/aircraft.c`, port of radar_ui.cpp).
-  Store: 6 slots, keys `a:<view>` / `w:<view>`; mapped slots are never erased.
-  **Flashed on board #2 2026-10-04** (192.168.86.221): boots, registers with the hub, caches the
-  1.35 MB map in 3.7 s, polls states. Map/towns/rings/planes/trails/clock confirmed by eye;
-  status pill 16 px + label placement (right/left/drop, clear of glass + pills) confirmed fixed.
-  Tap-for-info, KEY zoom/closest, PWR, BOOT toast not yet confirmed by the owner.
-  Build for the dev hub: `HUB_SERVER_URL=http://192.168.86.220:8098 ./build.sh`, then flash by
-  SERIAL, never by ttyACM number (both boards are on sdevs):
+- **Step 1 DONE** (6981bc2): `server/hub/` package; legacy radar paths still aliased.
+- **Step 2 DONE** (638bbc6): `server/hub/aircraft/` -- OpenSky poller (only while a device fetched
+  states in the last 2 min), adsbdb/hexdb lookups with prefetch, ABN1 basemap bundles, AST1 binary
+  states, previews. Needs `OPENSKY_CLIENT_*` and `AIR_LAT/AIR_LON` (exact home, NOT in the public
+  repo) in the environment.
+- **Step 3 DONE** (`firmware/hub/`, 1.51 MB of the 2 MB app slot): core (hello + names, screen
+  policy, PWR/BOOT, OTA channel `hub` at `/firmware/hub.{json,bin}`), board `boards/ws_c6_216.c`
+  (CST9220 touch, BOOT/KEY GPIO, PWR via AXP2101 IRQ 0x41/0x49 bit3), LVGL in the board's DMA
+  strips (`core/ui.c`), aircraft app (`apps/aircraft.c`). Store: 6 slots, keys `a:<view>` /
+  `w:<view>`, ordered by commit seq; mapped slots are never erased.
+- **Step 4 DONE**: weather app (`apps/weather.c` + `rdl.c` + `jpeg_draw.c`; `app_t.raw` keeps LVGL
+  paused). Server loop budget 2.06 MB. Both boards run the hub firmware; all buttons, touch info
+  and app switching verified by the owner 2026-10-04.
+- **Bedrock deploy IN PROGRESS (2026-10-04):** Dockhand git stack 31 `amoled-radar` (env 11,
+  docker-homelab `amoled-radar/docker-compose.yml`, manual sync) now specifies image
+  `display-hub:8cd4601`, container `display-hub`, port 8098, VIP `displays` (docker-homelab
+  34beb3a). Stack/service/volume keep the amoled-radar name on purpose. Bedrock's volume
+  `amoled-radar_amoled-radar-cache` is pre-staged with devices.json (names) and firmware
+  32d42ef-10042116 (points at bedrock) on root + `hub` channels, plus `radar-backup`.
+  Waiting on the owner: add stack vars OPENSKY_CLIENT_ID/SECRET, AIR_LAT/AIR_LON in Dockhand
+  (a DB write was blocked as a secret-store write) and Deploy. Then: publish the same build on
+  radar-dev so both boards OTA over to bedrock, verify, retire radar-dev (sdevs :8098,
+  cache ~/radar-dev-cache). Until then the boards use radar-dev (their builds point at .220).
+- Builds: `./build.sh` (bedrock, the default) or `HUB_SERVER_URL=http://192.168.86.220:8098
+  ./build.sh` (dev). Flash by SERIAL, never by ttyACM number (both boards are on sdevs):
   `PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
 - **USB on sdevs** (pve-faraday VM 121): both pinned by physical port 2026-10-04 --
   `usb0: host=3-1.4.1` (weather board), `usb1: host=3-1.3` (aircraft board).
@@ -40,10 +47,6 @@ One server for every small display: weather radar today, aircraft next (ported f
   which button was pressed, not hardware.
   Opening the serial port can reset a board. Logs: a pyserial read inside the IDF container
   (the ports are root:dialout and snadboy is not in dialout).
-- Bedrock still runs the old `ghcr.io/snadboy/amoled-radar:c3eba80` (no host port); moving its
-  stack to `display-hub` (port 8098, new volume -> republish firmware) is not done.
-- The Arduino aircraft board still polls OpenSky itself on the same account, so credits are
-  spent twice while the hub is also polling.
 
 The weather notes below predate the hub and still describe the running system.
 
