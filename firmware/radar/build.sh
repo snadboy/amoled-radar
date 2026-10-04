@@ -32,6 +32,8 @@ os.umask(old)
 PY
 
 rm -f sdkconfig            # regenerate from defaults so secrets/server changes take effect
+# Firmware version = commit + build time. OTA installs whenever the server's differs.
+echo "$(git rev-parse --short HEAD)$(git diff --quiet -- . || echo +)-$(date -u +%m%d%H%M)" > version.txt
 docker run --rm -v "$PWD":/project -w /project -e HOME=/tmp -u "$(id -u):$(id -g)" \
   -e SDKCONFIG_DEFAULTS="sdkconfig.defaults;secrets.defaults" "$IDF_IMAGE" \
   bash -c 'idf.py set-target esp32c6 >/dev/null && idf.py build' 2>&1 \

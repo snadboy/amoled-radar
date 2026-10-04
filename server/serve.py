@@ -20,7 +20,7 @@ Endpoints
   /c/<id>/status.jpg           480x56 temperature / humidity / city strip
   /healthz
 """
-import io, json, os, threading, time
+import hashlib, io, json, os, threading, time, urllib.parse
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -56,19 +56,28 @@ DEFAULT_CITIES = [
     {"id": "canton",  "name": "Canton",    "lat": 42.3087, "lon": -83.4822, "tz": "America/Detroit",
      "places": [["Detroit", 42.3314, -83.0458], ["Ann Arbor", 42.2808, -83.7430],
                 ["Pontiac", 42.6389, -83.2910], ["Monroe", 41.9164, -83.3977]]},
-    # The lower 48. lon_span fills the panel width; RainViewer zoom 3 at 512 px is
-    # ~7.8 km/px at this latitude, close to the ~9 km/px shown. No rings or
-    # crosshair. There is no national temperature, so the strip shows Geneva's
-    # reading and says so. A 4th element of 1 in a place marks one of your cities.
-    {"id": "us", "name": "Entire country", "lat": 37.5, "lon": -96.0, "tz": "America/Chicago",
-     "ha": True, "status_label": "Geneva", "national": True, "suppress_clear_air": True,
-     "lon_span": 61.0, "base_zoom": 5, "radar_zoom": 3, "radar_tile": 512,
+    # Regional view framing all three cities (St. Louis .. Canton, ~580 mi across).
+    # Replaced an "Entire country" view on 2026-10-03: the lower 48 at ~9 km/px was
+    # too small to read on a 2.16-inch panel. lon_span fills the width; RainViewer
+    # zoom 5 at 512 px is ~1.86 km/px, matching what's shown. No rings or crosshair
+    # ("wide"). A 4th element of 1 marks one of your own cities (amber marker).
+    {"id": "midwest", "name": "Midwest", "lat": 40.5, "lon": -86.8, "tz": "America/Chicago",
+     "ha": True, "status_label": "Geneva", "wide": True, "suppress_clear_air": True,
+     "lon_span": 10.4, "base_zoom": 7, "radar_zoom": 5, "radar_tile": 512,
      "places": [["Geneva", 41.8875, -88.3054, 1], ["St. Louis", 38.6270, -90.1994, 1],
-                ["Canton", 42.3087, -83.4822, 1],
-                ["Seattle", 47.6062, -122.3321], ["Los Angeles", 34.0522, -118.2437],
-                ["Denver", 39.7392, -104.9903], ["Dallas", 32.7767, -96.7970],
-                ["Miami", 25.7617, -80.1918], ["New York", 40.7128, -74.0060]]},
+                ["Canton", 42.3087, -83.4822, 1], ["Milwaukee", 43.0389, -87.9065],
+                ["Indianapolis", 39.7684, -86.1581], ["Fort Wayne", 41.0793, -85.1394],
+                ["Louisville", 38.2527, -85.7585]]},
 ]
+# Screen control for the device, decided here so the board never needs an HA token.
+OCC_ENTITY   = os.environ.get("RADAR_OCC_ENTITY", "binary_sensor.upstairs_office_lwr02_occupancy")
+LUX_ENTITY   = os.environ.get("RADAR_LUX_ENTITY", "sensor.upstairs_office_lwr02_illuminance")
+VACANT_OFF_S = int(os.environ.get("RADAR_VACANT_OFF_S", "300"))   # empty this long -> screen off
+BRIGHT_MIN     = int(os.environ.get("RADAR_BRIGHT_MIN", "140"))     # 0-255 panel brightness
+BRIGHT_MAX     = int(os.environ.get("RADAR_BRIGHT_MAX", "255"))
+BRIGHT_PER_LUX = float(os.environ.get("RADAR_BRIGHT_PER_LUX", "0.6"))
+FIRMWARE_DIR = os.environ.get("RADAR_FIRMWARE_DIR", os.path.join(R.CACHE, "firmware"))
+
 CITIES = json.loads(os.environ["RADAR_CITIES"]) if os.environ.get("RADAR_CITIES") else DEFAULT_CITIES
 BY_ID  = {c["id"]: c for c in CITIES}
 
@@ -90,7 +99,7 @@ def reading(city):
     return R.ha_reading() if city.get("ha") else R.obs_reading(city["lat"], city["lon"])
 
 def clear_air_filter_on(city):
-    """Always on for views that ask for it (national); otherwise on only when the
+    """Always on for views that ask for it (wide); otherwise on only when the
     city's own current temperature rules out snow."""
     if city.get("suppress_clear_air"):
         return True
@@ -149,15 +158,18 @@ def build_radar(city, maps):
     left, right = clock(t_first, city), clock(t_last, city)
     for layer, t in zip(seq, times):
         frame = base.copy(); frame.paste(layer, (0, 0), layer)
-        R.draw_places(frame, pts, crosshair=not city.get("national"))
+        R.draw_places(frame, pts, crosshair=not city.get("wide"))
         frame = frame.crop((R.ORBIT_PX + ox, R.ORBIT_PX + oy,
                             R.ORBIT_PX + ox + R.PANEL, R.ORBIT_PX + oy + R.VIEW_H))
         frac = (t - t_first) / float(t_last - t_first) if t_last > t_first else 1.0
         out.append(_jpeg(R.progress_bar(frame, frac, left, right, ox, oy)))
     return out, [int(t) for t in times], keys, {"clear_air": suppress, "qc_masked": qc_used, "real_frames": len(layers)}
 
+_temps = {}
+
 def build_status(city):
     temp, hum = reading(city)
+    _temps[city["id"]] = temp
     stamp = clock(time.time(), city)
     if city.get("status_label"):          # whose reading this is, when it isn't the view's
         stamp = "%s \u00b7 %s" % (city["status_label"], stamp)
@@ -208,6 +220,35 @@ class Server(ThreadingHTTPServer):
             return
         super().handle_error(request, client_address)
 
+def device_state():
+    """What the panel should do. Occupancy off for VACANT_OFF_S -> off. Brightness
+    follows the room: the panel is never brighter than the room needs, which is the
+    second-biggest burn-in lever after not being on at all."""
+    occ, since = R.ha_entity(OCC_ENTITY)
+    lux_s, _ = R.ha_entity(LUX_ENTITY)
+    try: lux = float(lux_s)
+    except (TypeError, ValueError): lux = None
+    display, reason = "on", "occupied"
+    if occ == "off" and since and time.time() - since >= VACANT_OFF_S:
+        display, reason = "off", "room empty %d min" % ((time.time() - since) // 60)
+    elif occ is None:
+        reason = "occupancy unknown -- staying on"
+    # Floor raised from 50 to 140 after the owner found 69/255 (35 lx room) too dark.
+    # Occupancy blanking is the main burn-in protection; brightness is secondary.
+    lo, hi, k = BRIGHT_MIN, BRIGHT_MAX, BRIGHT_PER_LUX
+    bright = int((lo + hi) / 2) if lux is None else int(max(lo, min(hi, lo + lux * k)))
+    return {"display": display, "brightness": bright, "reason": reason,
+            "lux": lux, "occupancy": occ}
+
+def firmware_info():
+    try:
+        ver = open(os.path.join(FIRMWARE_DIR, "version.txt")).read().strip()
+        path = os.path.join(FIRMWARE_DIR, "firmware.bin")
+        data = open(path, "rb").read()
+        return {"version": ver, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    except OSError:
+        return None
+
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def log_message(self, *a): pass
@@ -223,6 +264,22 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         p = self.path.split("?")[0].rstrip("/") or "/"
+        q = dict(urllib.parse.parse_qsl(self.path.split("?", 1)[1])) if "?" in self.path else {}
+        if p == "/device.json":
+            return self._json(device_state())
+        if p == "/ui/picker.jpg":
+            try: hl = int(q.get("hl", "0"))
+            except ValueError: hl = 0
+            entries = [(c["id"], c["name"], _temps.get(c["id"])) for c in CITIES]
+            return self._send(_jpeg(R.picker_panel(entries, hl % len(entries), q.get("cur", ""))), "image/jpeg")
+        if p == "/ui/hold.jpg":
+            return self._send(_jpeg(R.hold_pill()), "image/jpeg")
+        if p == "/firmware.json":
+            fi = firmware_info()
+            return self._json(fi if fi else {"error": "no firmware published"}, 200 if fi else 404)
+        if p == "/firmware.bin":
+            try: return self._send(open(os.path.join(FIRMWARE_DIR, "firmware.bin"), "rb").read(), "application/octet-stream")
+            except OSError: return self._json({"error": "no firmware published"}, 404)
         if p in ("/", "/cities.json"):
             return self._json([dict({k: c[k] for k in ("id", "name", "lat", "lon")},
                                     default=bool(c.get("default"))) for c in CITIES])

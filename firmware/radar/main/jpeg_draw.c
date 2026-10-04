@@ -10,11 +10,13 @@
 #include "board.h"
 #include "esp32c6/rom/tjpgd.h"
 #include "esp_log.h"
+#include "store.h"
 
 static const char *TAG = "jpeg";
 
 typedef struct {
-    const uint8_t *src;
+    const uint8_t *mem;          // memory source, or NULL for flash
+    int slot; uint32_t base;     // flash source
     size_t len, pos;
     int x, y, dim, which;
 } ctx_t;
@@ -25,7 +27,10 @@ static UINT in_fn(JDEC *jd, BYTE *buf, UINT n)
 {
     ctx_t *c = (ctx_t *)jd->device;
     if (c->pos + n > c->len) n = (UINT)(c->len - c->pos);
-    if (buf) memcpy(buf, c->src + c->pos, n);
+    if (buf && n) {
+        if (c->mem) memcpy(buf, c->mem + c->pos, n);
+        else if (store_read(c->slot, c->base + c->pos, buf, n) != ESP_OK) return 0;
+    }
     c->pos += n;
     return n;
 }
@@ -52,12 +57,11 @@ static UINT out_fn(JDEC *jd, void *bitmap, JRECT *r)
     return 1;
 }
 
-esp_err_t jpeg_draw(const uint8_t *jpg, size_t len, int x, int y, int dim)
+static esp_err_t run(ctx_t *c)
 {
     JDEC jd;
-    ctx_t c = { .src = jpg, .len = len, .pos = 0, .x = x, .y = y, .dim = dim, .which = 0 };
     board_draw_wait();                           // both strips must be free before we start
-    JRESULT r = jd_prepare(&jd, in_fn, s_pool, sizeof(s_pool), &c);
+    JRESULT r = jd_prepare(&jd, in_fn, s_pool, sizeof(s_pool), c);
     if (r != JDR_OK) { ESP_LOGE(TAG, "prepare failed: %d", r); return ESP_FAIL; }
     if (jd.width > PANEL_W || jd.msy * 8 > 16) {
         ESP_LOGE(TAG, "unsupported image %ux%u (MCU height %d)", jd.width, jd.height, jd.msy * 8);
@@ -65,5 +69,26 @@ esp_err_t jpeg_draw(const uint8_t *jpg, size_t len, int x, int y, int dim)
     }
     r = jd_decomp(&jd, out_fn, 0);
     if (r != JDR_OK) { ESP_LOGE(TAG, "decode failed: %d", r); return ESP_FAIL; }
+    return ESP_OK;
+}
+
+esp_err_t jpeg_draw(const uint8_t *jpg, size_t len, int x, int y, int dim)
+{
+    ctx_t c = { .mem = jpg, .len = len, .x = x, .y = y, .dim = dim };
+    return run(&c);
+}
+
+esp_err_t jpeg_draw_flash(int slot, uint32_t off, uint32_t len, int x, int y, int dim)
+{
+    ctx_t c = { .mem = NULL, .slot = slot, .base = off, .len = len, .x = x, .y = y, .dim = dim };
+    return run(&c);
+}
+
+esp_err_t jpeg_size(const uint8_t *jpg, size_t len, int *w, int *h)
+{
+    JDEC jd;
+    ctx_t c = { .mem = jpg, .len = len };
+    if (jd_prepare(&jd, in_fn, s_pool, sizeof(s_pool), &c) != JDR_OK) return ESP_FAIL;
+    *w = jd.width; *h = jd.height;
     return ESP_OK;
 }

@@ -10,3 +10,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+# OTA from the LAN server (plain HTTP: the board can't use Tailscale), with rollback:
+# a new image must call ota_mark_good() after drawing a frame or the bootloader reverts.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y

@@ -176,17 +176,12 @@ esp_err_t board_init(void)
     ESP_ERROR_CHECK(panel_init());
     // Test pattern for 2 s: red / green / blue / white / black bars. If these are
     // visible the panel path works; wrong colours mean RGB order or byte order.
-    esp_err_t on = esp_lcd_panel_disp_on_off(s_panel, true);
-    ESP_LOGI(TAG, "display on -> %s", esp_err_to_name(on));
-    board_set_brightness(255);
+    esp_lcd_panel_disp_on_off(s_panel, true);
+    // 1 s colour bars at boot: red, green, blue, white, black. Proves the panel path
+    // before anything else runs (it hid a wrong chip-select for four builds).
     static const uint16_t bars[] = {0xF800, 0x07E0, 0x001F, 0xFFFF, 0x0000};
     for (int i = 0; i < 5; i++) board_fill(0, i * 96, PANEL_W, (i + 1) * 96, bars[i]);
-    ESP_LOGI(TAG, "DIAG test pattern at full brightness: red, green, blue, white, black -- press KEY to continue");
-    gpio_config_t key = { .pin_bit_mask = 1ULL << 10, .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE };
-    gpio_config(&key);
-    for (int t = 0; t < 600 * 20 && gpio_get_level(10) == 1; t++) vTaskDelay(pdMS_TO_TICKS(50));
-    ESP_LOGI(TAG, "DIAG continuing (%s)", gpio_get_level(10) == 0 ? "KEY pressed" : "timeout");
-    board_set_brightness(CONFIG_RADAR_BRIGHTNESS);
+    vTaskDelay(pdMS_TO_TICKS(1000));
     board_fill(0, 0, PANEL_W, PANEL_H, 0x0000);
     ESP_LOGI(TAG, "panel up, %d free heap", (int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     return ESP_OK;

@@ -341,6 +341,48 @@ Mitigations, strongest first:
 5. **True black everywhere else — DONE** via `darken_for_amoled()`. Black pixels are
    genuinely off and age zero.
 
+## Firmware (firmware/radar) -- running on the board since 2026-10-03
+
+ESP-IDF 5.5.3 in Espressif's container (`./build.sh`, `./flash.sh`); nothing installed on
+sdevs. Board reaches sdevs via Proxmox USB passthrough: **pve-faraday VM 121
+`usb0: host=303a:1001`** -> `/dev/ttyACM0` (hot-plugged, no reboot).
+
+* **Display:** CO5300 via `espressif/esp_lcd_sh8601` 1.0.0, QSPI 40 MHz, **CS GPIO15**.
+  Panel reset = power-cycle AXP2101 ALDO3. Brightness is in the init sequence itself.
+  1 s colour bars at boot prove the panel path (they would have exposed the CS bug at once).
+* **Decode:** C6 **ROM** TJpgDec (`esp32c6/rom/tjpgd.h`, RGB888 out), drawn in 16-row strips
+  with ping-pong DMA buffers. **~240 ms per 480x424 frame = ~4.2 fps** -- the hard limit
+  with JPEG on this chip. A faster "map from flash + changed pixels" format is the option
+  if that is ever not good enough.
+* **Flash cache:** `frames` partition, 5 slots x 2.375 MB for 4 views + a spare; header
+  written last so a loop is complete or invisible. Current view checked every 60 s, others
+  every 2 h. Slots of views the server no longer lists count as free (`store_set_views`) --
+  without that a retired view (the old national one) would hold a slot forever.
+* **KEY (GPIO10):** tap = picker (server-rendered JPEG; KEY steps, 3 s idle chooses, view
+  saved in NVS); hold 1 s = screen off (hint pill from 250 ms); any press wakes. Manual off
+  overrides occupancy; manual wake in an empty room lasts 10 min.
+* **Server-decided screen:** `/device.json` -- off after the office LWR02 reports empty for
+  5 min; brightness `140 + 0.6*lux`, max 255 (floor raised from 50: 69/255 was too dark).
+* **OTA:** device fetches `/firmware.json` 90 s after boot and every 6 h; installs if the
+  version string differs. **Rollback enabled**: an image must draw a frame and call
+  `ota_mark_good()` or the bootloader reverts. Verified end to end 2026-10-03.
+  The binary embeds the WiFi password, so it is published ONLY to the server's local
+  volume (`/cache/firmware/{firmware.bin,version.txt}`), never to GitHub.
+  Publish: `./build.sh && cp build/amoled_radar.bin <cache>/firmware/firmware.bin && cp version.txt <cache>/firmware/`.
+
+**Rounded glass:** the panel's corners are rounded (~50-56 px radius, measured from a photo).
+`render.CORNER_R = 56`; status text sits `SIDE_INSET = 40` from the sides, the "50 mi" label
+is inset, and town labels treat edges/corners as HARD limits and overlaps as SOFT: your own
+cities always get a label; a reference town that can't fit is dropped (Columbus was, so the
+Midwest view uses Fort Wayne).
+
+**Midwest view** replaced "Entire country" (too small at ~9 km/px on 2.16"): lon_span 10.4
+around 40.5N 86.8W, RainViewer z5/512 (~1.86 km/px), basemap z7. Flag `wide` = no rings.
+
+**Dev server:** while bedrock awaits a Dockhand Sync, a copy runs on sdevs
+(`docker run ... -p 8098:8080 -v ~/radar-dev-cache:/cache amoled-radar:dev`) and the board
+is built with `RADAR_SERVER_URL=http://192.168.86.220:8098`.
+
 ## Next steps
 
 1. Package the renderer as a container + HTTP endpoint on `bedrock` via dockhand.

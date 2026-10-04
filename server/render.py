@@ -22,6 +22,11 @@ LAT  = float(os.environ.get('RADAR_LAT', '41.90'))
 LON  = float(os.environ.get('RADAR_LON', '-88.32'))
 RADIUS_MI   = 50.0
 PANEL       = 480
+# The panel's glass has ROUNDED CORNERS (~50-56 px radius, measured from a photo of
+# the real board 2026-10-03). Anything inside a corner arc is cut off: it clipped
+# the "50 mi" label, the first digit of the temperature and the "%". Keep text out.
+CORNER_R    = 56
+SIDE_INSET  = 40          # status strip text sits this far in from each side
 STATUS_H    = 56
 VIEW_H      = PANEL - STATUS_H          # 424 px of radar
 BASE_ZOOM   = 9
@@ -47,7 +52,7 @@ def window(z, tile, lat=None, lon=None, view=None):
     Two modes, set per view:
       * radius_mi (cities, default 50): the full radius fits the SHORT axis, so
         it is visible in every direction.
-      * lon_span (national): the given span of longitude fills the panel WIDTH.
+      * lon_span (wide regional views): the span of longitude fills the panel WIDTH.
     """
     view = view or {}
     lat = LAT if lat is None else lat; lon = LON if lon is None else lon
@@ -141,7 +146,7 @@ def suppress_clear_air(img):
     in the evening, plus a soft halo around real storms. Rain (blue, B > R) and
     heavy returns (R - B > 140, opaque) are untouched.
 
-    Used on the national view only: whether this band also carries light snow is
+    Always used on wide views; on city views only above 40 F, since whether this band carries light snow is
     unverified, so the city views keep it."""
     import numpy as np
     a = np.asarray(img.convert("RGBA")).copy()
@@ -218,8 +223,8 @@ def is_watermark(img):
 
 def decorate(img, view=None):
     view = view or {}
-    if view.get("national"):
-        return img          # rings and a crosshair mean nothing at national scale
+    if view.get("wide"):
+        return img          # rings and a crosshair mean nothing on a regional view
     d = ImageDraw.Draw(img, "RGBA")
     cx, cy = img.width/2, img.height/2
     # The oversized canvas also covers the orbit bleed, so its half-height is MORE
@@ -236,7 +241,8 @@ def decorate(img, view=None):
     # decorate() runs on the OVERSIZED canvas, which the orbit then crops by up to
     # ORBIT_PX on every side -- so keep the label 2*ORBIT_PX in from the edges or
     # some orbit positions cut it off ("50 m").
-    d.text((img.width - 2*ORBIT_PX - 6, 2*ORBIT_PX), "50 mi", font=fnt(13), fill=(120, 134, 148, 130), anchor="ra")
+    # ...and clear of the rounded top-right corner of the glass.
+    d.text((img.width - 2*ORBIT_PX - 22, 2*ORBIT_PX + 24), "50 mi", font=fnt(13), fill=(120, 134, 148, 130), anchor="ra")
     return img
 
 _fc = {}
@@ -252,12 +258,12 @@ def status_strip(temp, hum, stamp, city=None):
     img = Image.new("RGB", (PANEL, STATUS_H), (0, 0, 0)); d = ImageDraw.Draw(img)
     d.line([0, 0, PANEL, 0], fill=(40, 46, 54), width=1)
     y = STATUS_H//2 + 1
-    d.text((16, y), temp, font=fnt(36, True), fill=(255, 255, 255), anchor="lm")
+    d.text((SIDE_INSET, y), temp, font=fnt(36, True), fill=(255, 255, 255), anchor="lm")
     w = d.textlength(temp, font=fnt(36, True))
-    d.text((16+w+5, y+3), "°F", font=fnt(20), fill=(145, 156, 168), anchor="lm")
-    d.text((PANEL-16, y+3), "%", font=fnt(20), fill=(145, 156, 168), anchor="rm")
+    d.text((SIDE_INSET+w+5, y+3), "°F", font=fnt(20), fill=(145, 156, 168), anchor="lm")
+    d.text((PANEL-SIDE_INSET, y+3), "%", font=fnt(20), fill=(145, 156, 168), anchor="rm")
     pw = d.textlength("%", font=fnt(20))
-    d.text((PANEL-16-pw-5, y), hum, font=fnt(36, True), fill=(255, 255, 255), anchor="rm")
+    d.text((PANEL-SIDE_INSET-pw-5, y), hum, font=fnt(36, True), fill=(255, 255, 255), anchor="rm")
     if city:
         d.text((PANEL//2, y - 9), city, font=fnt(17, True), fill=(196, 204, 214), anchor="mm")
         d.text((PANEL//2, y + 11), stamp, font=fnt(13), fill=(115, 128, 142), anchor="mm")
@@ -293,16 +299,33 @@ def draw_places(frame, pts, crosshair=True):
     keep_out = [(cx - 14, cy - 14, cx + 14, cy + 14)] if crosshair else []
     keep_out += [(x - 5, y - 5, x + 5, y + 5) for _, x, y, _ in pts]   # every dot
     edge = 2 * ORBIT_PX + 4
-    def hits(box):
+    # The radar view is the panel's TOP 424 px, so only its two top corners are
+    # rounded (the strip below takes the bottom ones). Frame coords include the
+    # orbit margin, so the visible panel starts at ORBIT_PX.
+    def in_corner(px, py):
+        vx, vy = px - ORBIT_PX, py - ORBIT_PX
+        if vy >= CORNER_R: return False
+        if vx < CORNER_R:          cx = CORNER_R
+        elif vx > PANEL - CORNER_R: cx = PANEL - CORNER_R
+        else: return False
+        return (vx - cx) ** 2 + (vy - CORNER_R) ** 2 > (CORNER_R - 4) ** 2
+    def hard(box):      # off the panel or inside a rounded corner: never acceptable
         if box[0] < edge or box[2] > frame.width - edge: return True
+        return any(in_corner(x, y) for x in (box[0], box[2]) for y in (box[1], box[3]))
+    def soft(box):      # overlaps the crosshair, a dot or another label
         return any(not (box[2] < k[0] or box[0] > k[2] or box[3] < k[1] or box[1] > k[3]) for k in keep_out)
     for name, x, y, mine in pts:
-        w = d.textlength(name, font=f)
-        right = (x + 8, y - 9, x + 8 + w, y + 9)
-        left  = (x - 8 - w, y - 9, x - 8, y + 9)
-        box, anchor, tx = (right, "lm", x + 8) if not hits(right) or hits(left) else (left, "rm", x - 8)
+        w = d.textlength(name, font=f) + 4                    # + the 2 px outline each side
+        right = ((x + 8, y - 9, x + 8 + w, y + 9), "lm", x + 8)
+        left  = ((x - 8 - w, y - 9, x - 8, y + 9), "rm", x - 8)
+        choice = next((o for o in (right, left) if not hard(o[0]) and not soft(o[0])), None)
+        if choice is None and mine:                           # your cities always get a label
+            choice = next((o for o in (right, left) if not hard(o[0])), None)
+        if choice is None:
+            continue                                          # a reference town that won't fit: drop it
+        box, anchor, tx = choice
         keep_out.append(box)
-        # your own cities (national view) get an amber marker so they stand out
+        # your own cities (wide view) get an amber marker so they stand out
         dot = (240, 172, 30, 240) if mine else (225, 230, 238, 230)
         r = 4.5 if mine else 3.5
         d.ellipse([x - r, y - r, x + r, y + r], fill=dot, outline=(0, 0, 0, 255), width=1)
@@ -339,6 +362,63 @@ def progress_bar(frame, frac, left, right, ox=0, oy=0):
     d.rounded_rectangle([x0, y - 1.5, xf, y + 1.5], radius=1.5, fill=(214, 150, 20, 255))
     d.ellipse([xf - 4, y - 4, xf + 4, y + 4], fill=(240, 172, 30, 255))
     return frame
+
+# ---------------------------------------------------------------------------
+# On-device UI, rendered here so the firmware needs no fonts. The device draws
+# these JPEGs over a dimmed radar frame and animates only the bars itself.
+# Geometry is shared with the firmware (see ui.c): keep it in sync.
+# ---------------------------------------------------------------------------
+PICKER_W     = 392                     # drawn at x = (480 - 392) / 2 = 44
+PICKER_ROW_H = 52
+HOLD_W, HOLD_H = 240, 40               # drawn at x = 120, y = 380 (below the picker, above the strip)
+
+def picker_panel(entries, hl, cur):
+    """entries: [(id, name, temp)]. Height is a multiple of 4 so the device can
+    centre it on even coordinates (the CO5300 wants even windows). The bottom 22 px
+    are left for the countdown bar the device animates."""
+    n = len(entries)
+    H = 54 + n * (PICKER_ROW_H + 8) + 30
+    H += (-H) % 4
+    img = Image.new("RGB", (PICKER_W, H), (0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, PICKER_W - 1, H - 1], radius=11, outline=(58, 65, 75), width=2)
+    d.text((20, 30), "SHOW RADAR FOR", font=fnt(15, True), fill=(138, 149, 163), anchor="lm")
+    y = 50
+    for i, (cid, name, temp) in enumerate(entries):
+        on = i == hl
+        d.rounded_rectangle([16, y, PICKER_W - 17, y + PICKER_ROW_H], radius=8,
+                            fill=(255, 183, 3) if on else (17, 19, 23))
+        ink = (26, 18, 0) if on else (231, 235, 240)
+        if cid == cur:
+            d.ellipse([30, y + PICKER_ROW_H / 2 - 5, 40, y + PICKER_ROW_H / 2 + 5], fill=(26, 18, 0) if on else (154, 164, 177))
+        d.text((52, y + PICKER_ROW_H / 2), name, font=fnt(25, True), fill=ink, anchor="lm")
+        if temp not in (None, "", "--"):
+            d.text((PICKER_W - 34, y + PICKER_ROW_H / 2), "%s\u00b0" % temp, font=fnt(21), fill=(61, 44, 0) if on else (154, 164, 177), anchor="rm")
+        y += PICKER_ROW_H + 8
+    d.text((20, H - 26), "KEY: next   \u00b7   hold KEY: screen off", font=fnt(13), fill=(125, 135, 148), anchor="lm")
+    return img
+
+def hold_pill():
+    img = Image.new("RGB", (HOLD_W, HOLD_H), (0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, HOLD_W - 1, HOLD_H - 1], radius=10, outline=(58, 65, 75), width=2)
+    d.text((HOLD_W // 2, 15), "Hold to turn off", font=fnt(15, True), fill=(231, 235, 240), anchor="mm")
+    return img                              # device draws the fill bar at y+28..y+32
+
+def ha_entity(eid):
+    """(state, last_changed epoch) for any HA entity, or (None, None)."""
+    base = os.environ.get("HASS_SERVER", "").rstrip("/"); tok = os.environ.get("HASS_TOKEN", "")
+    if not (base and tok):
+        return None, None
+    try:
+        r = urllib.request.Request(base + "/api/states/" + eid, headers={"Authorization": "Bearer " + tok})
+        st = json.loads(urllib.request.urlopen(r, timeout=10).read())
+        from datetime import datetime
+        lc = datetime.fromisoformat(st["last_changed"].replace("Z", "+00:00")).timestamp()
+        return st["state"], lc
+    except Exception as e:
+        print("    HA %s unavailable (%s)" % (eid, str(e)[:40]))
+        return None, None
 
 _station_cache = {}
 

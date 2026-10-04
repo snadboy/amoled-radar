@@ -88,3 +88,30 @@ esp_err_t net_get(const char *url, uint8_t **out, size_t *out_len, size_t max_le
     *out = buf; *out_len = got;
     return ESP_OK;
 }
+
+esp_err_t net_stream(const char *url, net_sink_t sink, void *ctx, size_t *total)
+{
+    *total = 0;
+    esp_http_client_config_t cfg = { .url = url, .timeout_ms = 20000, .buffer_size = 4096 };
+    esp_http_client_handle_t h = esp_http_client_init(&cfg);
+    if (!h) return ESP_FAIL;
+    esp_err_t err = esp_http_client_open(h, 0);
+    if (err != ESP_OK) { esp_http_client_cleanup(h); return err; }
+    int64_t cl = esp_http_client_fetch_headers(h);
+    if (esp_http_client_get_status_code(h) != 200 || cl <= 0) {
+        esp_http_client_close(h); esp_http_client_cleanup(h);
+        return ESP_FAIL;
+    }
+    static uint8_t buf[4096];               // only the sync task streams
+    size_t got = 0;
+    err = ESP_OK;
+    while (got < (size_t)cl) {
+        int n = esp_http_client_read(h, (char *)buf, sizeof(buf));
+        if (n <= 0) { err = ESP_FAIL; break; }
+        if ((err = sink(ctx, buf, (size_t)n)) != ESP_OK) break;
+        got += (size_t)n;
+    }
+    esp_http_client_close(h); esp_http_client_cleanup(h);
+    *total = got;
+    return (err == ESP_OK && got == (size_t)cl) ? ESP_OK : ESP_FAIL;
+}
