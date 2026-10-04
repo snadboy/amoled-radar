@@ -19,7 +19,9 @@ One server for every small display: weather radar today, aircraft next (ported f
   in the board's DMA strips (`core/ui.c`), aircraft app (`apps/aircraft.c`, port of radar_ui.cpp).
   Store: 6 slots, keys `a:<view>` / `w:<view>`; mapped slots are never erased.
   **Flashed on board #2 2026-10-04** (192.168.86.221): boots, registers with the hub, caches the
-  1.35 MB map in 3.7 s, polls states. Touch/buttons/visuals still to be checked by eye.
+  1.35 MB map in 3.7 s, polls states. Map/towns/rings/planes/trails/clock confirmed by eye;
+  status pill 16 px + label placement (right/left/drop, clear of glass + pills) confirmed fixed.
+  Tap-for-info, KEY zoom/closest, PWR, BOOT toast not yet confirmed by the owner.
   Build for the dev hub: `HUB_SERVER_URL=http://192.168.86.220:8098 ./build.sh`, then flash by
   SERIAL, never by ttyACM number (both boards are on sdevs):
   `PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
