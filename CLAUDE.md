@@ -350,7 +350,18 @@ sdevs. Board reaches sdevs via Proxmox USB passthrough: **pve-faraday VM 121
 * **Display:** CO5300 via `espressif/esp_lcd_sh8601` 1.0.0, QSPI 40 MHz, **CS GPIO15**.
   Panel reset = power-cycle AXP2101 ALDO3. Brightness is in the init sequence itself.
   1 s colour bars at boot prove the panel path (they would have exposed the CS bug at once).
-* **Decode:** C6 **ROM** TJpgDec (`esp32c6/rom/tjpgd.h`, RGB888 out), drawn in 16-row strips
+* **Frame format RDL1 (replaced JPEG, 2026-10-04):** JPEG decode took 240 ms/frame and,
+  with no framebuffer, the panel showed every frame as a visible downward WIPE. Now the
+  server sends `/c/<id>/loop.bin`: the bare map once as raw RGB565, plus per frame a
+  zlib-compressed 8-bit layer (0 = keep map pixel, 1..255 = palette). The board copies map
+  rows from a memory-mapped slot and patches only changed pixels, inflating with the ROM's
+  `tinfl_decompress`. Measured on the board: **66 ms/frame** (map copy 17, inflate+patch 44,
+  panel 4). Loops are also SMALLER than JPEG (Geneva 415 KB vs 1148 KB). The server lowers
+  in-betweens (3 -> 2 -> 1 -> 0 per 10 min) until a loop fits `RADAR_LOOP_BUDGET` (2.4 MB).
+  Loop paced at ~5 s + 1.5 s dwell regardless of frame count.
+  Next lever if the wipe is still visible: per-frame "dirty strip" flags so unchanged
+  16-row strips are skipped entirely (clear day ~3 ms/frame).
+* **Decode (status strip, picker only now):** C6 **ROM** TJpgDec (`esp32c6/rom/tjpgd.h`, RGB888 out), drawn in 16-row strips
   with ping-pong DMA buffers. **~240 ms per 480x424 frame = ~4.2 fps** -- the hard limit
   with JPEG on this chip. A faster "map from flash + changed pixels" format is the option
   if that is ever not good enough.

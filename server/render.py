@@ -579,3 +579,67 @@ def tween_count(gap_s, per_10min):
     frame (a 20-minute gap) plays at the same speed as a normal one."""
     steps = max(1, int(round(gap_s / 600.0))) * (per_10min + 1)
     return steps - 1
+
+
+# ---------------------------------------------------------------------------
+# Loop format for the device ("RDL1")
+#
+# JPEG decode on the C6 takes ~240 ms per frame and the panel shows each frame
+# being painted as a visible downward wipe. This format lets the device put a
+# whole frame up in a few tens of ms: the bare map is sent ONCE as raw pixels,
+# and each frame is just "which pixels differ from the map", as a zlib-compressed
+# 8-bit layer (0 = keep the map pixel, 1..255 = palette colour). Unchanged pixels
+# are copied straight from flash; nothing is decoded except the small layer.
+#
+#   "RDL1" | u16 version=1 | u16 nframes | u16 w | u16 h | u16 ncolours | u16 0
+#   nframes x { u32 offset, u32 length, u8 is_real_frame, 3 x pad }   (offsets from blob start)
+#   256 x u16 palette (RGB565 big-endian; entry 0 unused)
+#   w*h x u16 map pixels (RGB565 big-endian)
+#   nframes x zlib(w*h index bytes)
+# ---------------------------------------------------------------------------
+import struct as _struct, zlib as _zlib
+
+def _rgb565_be(a):
+    import numpy as np
+    v = ((a[..., 0].astype(np.uint16) >> 3) << 11) | ((a[..., 1].astype(np.uint16) >> 2) << 5) | (a[..., 2].astype(np.uint16) >> 3)
+    return v.astype(">u2")
+
+def encode_loop(base_img, frames, keys):
+    import numpy as np
+    base = np.asarray(base_img.convert("RGB"))
+    h, w = base.shape[:2]
+    b565 = _rgb565_be(base)
+    arrs = [np.asarray(f.convert("RGB")) for f in frames]
+    masks = [_rgb565_be(a) != b565 for a in arrs]
+    changed = [a[m] for a, m in zip(arrs, masks) if m.any()]
+    pal_img = Image.new("P", (1, 1))
+    ncol = 0
+    if changed:
+        allpx = np.concatenate(changed).reshape(-1, 1, 3)
+        q = Image.fromarray(allpx.astype(np.uint8), "RGB").quantize(255, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        pal = q.getpalette()[:255 * 3]
+        ncol = len(pal) // 3
+        pal_img.putpalette(pal + [0] * (768 - len(pal)))
+        pal_rgb = np.array(pal, dtype=np.uint8).reshape(-1, 3)
+    else:
+        pal_rgb = np.zeros((0, 3), np.uint8)
+    palette = np.zeros(256, dtype=">u2")
+    if ncol:
+        palette[1:ncol + 1] = _rgb565_be(pal_rgb.reshape(1, -1, 3))[0]
+    payloads = []
+    for a, m in zip(arrs, masks):
+        idx = np.zeros((h, w), np.uint8)
+        if m.any():
+            qi = np.asarray(Image.fromarray(a, "RGB").quantize(palette=pal_img, dither=Image.Dither.NONE))
+            idx[m] = np.minimum(qi[m], ncol - 1).astype(np.uint8) + 1
+        payloads.append(_zlib.compress(idx.tobytes(), 9))
+    n = len(frames)
+    head = 16 + n * 12
+    off = head + 512 + w * h * 2
+    table = b""
+    keyset = set(keys)
+    for i, pl in enumerate(payloads):
+        table += _struct.pack("<IIB3x", off, len(pl), 1 if i in keyset else 0)
+        off += len(pl)
+    hdr = _struct.pack("<4sHHHHHH", b"RDL1", 1, n, w, h, ncol, 0)
+    return hdr + table + palette.tobytes() + b565.tobytes() + b"".join(payloads)

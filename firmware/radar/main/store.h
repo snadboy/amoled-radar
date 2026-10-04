@@ -16,6 +16,7 @@ typedef struct {
     uint32_t loop_id;
     char     view[16];
     uint16_t nframes, reserved;
+    uint32_t base_off, pal_off;              // RDL1: map pixels and palette within the slot
     uint32_t off[STORE_MAX_FRAMES];
     uint32_t len[STORE_MAX_FRAMES];
     uint8_t  key[STORE_MAX_FRAMES];          // 1 = real radar frame, 0 = in-between
@@ -32,3 +33,7 @@ void      store_pin(int slot);               // slot currently on screen: never 
 // Views the server currently offers. A slot holding a view NOT in this list is free:
 // without this, a retired view's loop would occupy a slot forever.
 void      store_set_views(const char (*ids)[16], int n);
+// Memory-map a slot for fast reads through the flash cache (NULL on failure).
+// A slot is unmapped automatically before it is erased for a new loop.
+const uint8_t *store_map(int slot);
+void      store_unmap(int slot);

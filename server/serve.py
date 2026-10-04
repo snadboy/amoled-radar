@@ -37,6 +37,8 @@ QUALITY    = int(os.environ.get("RADAR_JPEG_QUALITY", "86"))
 # own decode rate as too slow can play real frames only.
 TWEENS     = int(os.environ.get("RADAR_TWEENS", "3"))
 TWEEN_MODE = os.environ.get("RADAR_TWEEN_MODE", "motion")
+# Largest device-format loop the board's flash slot holds (5 slots of 2.375 MB, 4 KB header).
+LOOP_BUDGET = int(os.environ.get("RADAR_LOOP_BUDGET", str(2400000)))
 # Clear-air echo (RainViewer's faint tan/grey band) is filtered on city views only
 # when the city is at least this warm. Snow can't reach the ground at 40 F, so the
 # band can't be snow then; below it, the band is kept in case it is light snow.
@@ -142,28 +144,39 @@ def build_radar(city, maps):
             print("[radar] %s NOAA QC frame failed (%s) -- left unmasked" % (city["id"], str(e)[:60]), flush=True)
         layers.append(layer); stamps.append(f["time"])
 
-    # interpolate the radar layer only, then composite every layer the same way
-    seq, times, keys = [], [], []
-    for i, layer in enumerate(layers):
-        keys.append(len(seq)); seq.append(layer); times.append(stamps[i])
-        if i + 1 < len(layers) and TWEENS > 0:
-            n = R.tween_count(stamps[i + 1] - stamps[i], TWEENS)
-            for k, tw in enumerate(R.tweens(layer, layers[i + 1], n, TWEEN_MODE)):
-                seq.append(tw)
-                times.append(stamps[i] + (stamps[i + 1] - stamps[i]) * (k + 1) / (n + 1.0))
-
     pts = R.place_pixels(city.get("places", []), lat, lon, OW, OH, city)
-    out = []
-    t_first, t_last = times[0], times[-1]
-    left, right = clock(t_first, city), clock(t_last, city)
-    for layer, t in zip(seq, times):
-        frame = base.copy(); frame.paste(layer, (0, 0), layer)
+
+    def compose(layer, frac, left, right):
+        frame = base.copy()
+        if layer is not None: frame.paste(layer, (0, 0), layer)
         R.draw_places(frame, pts, crosshair=not city.get("wide"))
         frame = frame.crop((R.ORBIT_PX + ox, R.ORBIT_PX + oy,
                             R.ORBIT_PX + ox + R.PANEL, R.ORBIT_PX + oy + R.VIEW_H))
-        frac = (t - t_first) / float(t_last - t_first) if t_last > t_first else 1.0
-        out.append(_jpeg(R.progress_bar(frame, frac, left, right, ox, oy)))
-    return out, [int(t) for t in times], keys, {"clear_air": suppress, "qc_masked": qc_used, "real_frames": len(layers)}
+        return R.progress_bar(frame, frac, left, right, ox, oy)
+
+    # Interpolate the radar layer only, then composite. Fewer in-betweens if the
+    # device-format loop would not fit the board's flash slot (a big storm changes
+    # most pixels in every frame): 3 per 10 min, then 2, 1, real frames only.
+    for tw in sorted({t for t in (TWEENS, 2, 1, 0) if t <= TWEENS}, reverse=True):
+        seq, times, keys = [], [], []
+        for i, layer in enumerate(layers):
+            keys.append(len(seq)); seq.append(layer); times.append(stamps[i])
+            if i + 1 < len(layers) and tw > 0:
+                n = R.tween_count(stamps[i + 1] - stamps[i], tw)
+                for k, twl in enumerate(R.tweens(layer, layers[i + 1], n, TWEEN_MODE)):
+                    seq.append(twl)
+                    times.append(stamps[i] + (stamps[i + 1] - stamps[i]) * (k + 1) / (n + 1.0))
+        t_first, t_last = times[0], times[-1]
+        left, right = clock(t_first, city), clock(t_last, city)
+        span = float(t_last - t_first) or 1.0
+        imgs = [compose(layer, (t - t_first) / span, left, right) for layer, t in zip(seq, times)]
+        blob = R.encode_loop(compose(None, 0.0, left, right), imgs, keys)
+        if len(blob) <= LOOP_BUDGET or tw == 0:
+            break
+        print("[radar] %s loop %.1f MB with %d in-betweens > budget, trying fewer" % (city["id"], len(blob) / 1e6, tw), flush=True)
+    out = [_jpeg(im) for im in imgs]
+    return out, [int(t) for t in times], keys, {"clear_air": suppress, "qc_masked": qc_used,
+                                                 "real_frames": len(layers), "blob": blob, "tweens": tw}
 
 _temps = {}
 
@@ -191,6 +204,7 @@ def radar_loop():
                 with _lock:
                     _state[c["id"]].update(loop_id=int(time.time()), frames=frames, times=times,
                                            keys=keys, clear_air_filtered=info["clear_air"],
+                                           blob=info["blob"], tweens_used=info["tweens"],
                                            qc_masked="%d/%d" % (info["qc_masked"], info["real_frames"]),
                                            built=int(time.time()), radar_err=None)
                 print("[radar] %s ok (%d frames)" % (c["id"], len(frames)), flush=True)
@@ -304,7 +318,11 @@ class H(BaseHTTPRequestHandler):
                     "tweens_per_10min": TWEENS, "tween_mode": TWEEN_MODE,
                     "clear_air_filtered": st.get("clear_air_filtered"),
                     "qc_masked": st.get("qc_masked"),       # real frames masked by NOAA QC
+                    "loop_bin_size": len(st.get("blob") or b""), "tweens_used": st.get("tweens_used"),
                     "radar_err": st["radar_err"], "status_err": st["status_err"]})
+            if rest == "loop.bin":                  # device format (see render.encode_loop)
+                if not st.get("blob"): return self._json({"error": "not ready"}, 503)
+                return self._send(st["blob"], "application/octet-stream")
             if rest == "status.jpg":
                 if not st["status"]: return self._json({"error": "not ready"}, 503)
                 return self._send(st["status"], "image/jpeg")

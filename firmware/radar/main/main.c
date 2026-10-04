@@ -22,6 +22,7 @@
 #include "jpeg_draw.h"
 #include "keys.h"
 #include "net.h"
+#include "rdl.h"
 #include "nvs.h"
 #include "ota.h"
 #include "sdkconfig.h"
@@ -42,6 +43,8 @@ static const char *TAG = "radar";
 #define OTA_MS        (6 * 60 * 60 * 1000)
 #define MANUAL_ON_MS  (10 * 60 * 1000)
 #define PICK_IDLE_MS  3000
+#define LOOP_MS       5000
+#define DWELL_MS      1500
 #define AMBER         0xFD80          // ~ #ffb703
 #define TRACK         0x31A7          // dark grey
 
@@ -159,39 +162,29 @@ static void sync_view(int vi)
     uint32_t loop_id; cJSON *m;
     if (!manifest(vi, &loop_id, &m)) return;
     loop_hdr_t cur; int cs;
-    if (store_get(id, &cur, &cs) && cur.loop_id == loop_id) { cJSON_Delete(m); return; }
-
-    cJSON *sizes = cJSON_GetObjectItem(m, "sizes"), *keys = cJSON_GetObjectItem(m, "keys");
-    int n = cJSON_GetArraySize(sizes);
-    if (n > STORE_MAX_FRAMES) n = STORE_MAX_FRAMES;
-    uint8_t iskey[STORE_MAX_FRAMES] = {0};
-    cJSON *k;
-    cJSON_ArrayForEach(k, keys) if (k->valueint >= 0 && k->valueint < n) iskey[k->valueint] = 1;
-    size_t total = 0;
-    for (int i = 0; i < n; i++) total += (size_t)cJSON_GetArrayItem(sizes, i)->valueint;
-    bool keys_only = total > store_slot_capacity();        // a stormy loop too big: real frames only
+    bool have = store_get(id, &cur, &cs) && cur.loop_id == loop_id;
+    const cJSON *bs = cJSON_GetObjectItem(m, "loop_bin_size");
+    size_t size = cJSON_IsNumber(bs) ? (size_t)bs->valuedouble : 0;
     cJSON_Delete(m);
+    if (have) return;
+    if (!size || size > store_slot_capacity()) { ESP_LOGW(TAG, "%s: loop size %u unusable", id, (unsigned)size); return; }
 
     int slot = store_begin(id);
     if (slot < 0) { ESP_LOGW(TAG, "no free slot for %s yet", id); return; }
+    char url[URL_MAX]; size_t got;
+    sink_t sk = { .slot = slot, .off = STORE_DATA_OFF };
+    int64_t t0 = ms();
+    snprintf(url, sizeof(url), "%s/c/%s/loop.bin", CONFIG_RADAR_SERVER_URL, id);
+    if (net_stream(url, to_flash, &sk, &got) != ESP_OK) { ESP_LOGW(TAG, "%s loop download failed; retry later", id); return; }
     loop_hdr_t h = {0};
     strlcpy(h.view, id, sizeof(h.view));
     h.loop_id = loop_id;
-    sink_t sk = { .slot = slot, .off = STORE_DATA_OFF };
-    int64_t t0 = ms();
-    for (int i = 0, j = 0; i < n; i++) {
-        if (keys_only && !iskey[i]) continue;
-        char url[URL_MAX]; size_t got;
-        snprintf(url, sizeof(url), "%s/c/%s/frame/%d.jpg", CONFIG_RADAR_SERVER_URL, id, i);
-        uint32_t start = sk.off;
-        if (net_stream(url, to_flash, &sk, &got) != ESP_OK) { ESP_LOGW(TAG, "%s frame %d failed; retry later", id, i); return; }
-        h.off[j] = start; h.len[j] = (uint32_t)got; h.key[j] = iskey[i]; h.nframes = (uint16_t)++j;
-    }
+    if (rdl_parse(slot, &h) != ESP_OK) return;
     uint32_t after;                                        // loop rebuilt mid-download? discard
     if (!manifest(vi, &after, NULL) || after != loop_id) { ESP_LOGW(TAG, "%s changed during download", id); return; }
     store_commit(slot, &h);
-    ESP_LOGI(TAG, "%s: loop %lu cached in slot %d (%u frames, %lu KB, %lld ms%s)", id, (unsigned long)loop_id, slot,
-             h.nframes, (unsigned long)((sk.off - STORE_DATA_OFF) / 1024), ms() - t0, keys_only ? ", real frames only" : "");
+    ESP_LOGI(TAG, "%s: loop %lu cached in slot %d (%u frames, %u KB, %lld ms)", id, (unsigned long)loop_id,
+             slot, h.nframes, (unsigned)(got / 1024), ms() - t0);
 }
 
 static void poll_device(void)
@@ -238,7 +231,7 @@ static void draw_status(void)
 static void redraw_frame(int dim)
 {
     if (s_shown_slot >= 0 && s_shown_idx >= 0)
-        jpeg_draw_flash(s_shown_slot, s_shown.off[s_shown_idx], s_shown.len[s_shown_idx], 0, 0, dim);
+        rdl_draw(s_shown_slot, &s_shown, s_shown_idx, dim);
     else
         board_fill(0, 0, PANEL_W, VIEW_H, 0x0000);
 }
@@ -370,6 +363,7 @@ void app_main(void)
     load_views();
     xTaskCreate(sync_task, "sync", 8192, NULL, 4, NULL);
     bool marked = false;
+    int64_t draw_ms_sum = 0; int draws = 0;
 
     for (;;) {
         if (s_state == OFF) {
@@ -389,15 +383,25 @@ void app_main(void)
             wait_events(500);
             continue;
         }
+        if (s_shown_slot >= 0 && s_shown_slot != slot) store_unmap(s_shown_slot);   // free the old mapping
         store_pin(slot); s_shown_slot = slot; s_shown = h;
         s_restart = false;
+        // Whole loop ~5 s plus a 1.5 s dwell on the latest frame, whatever the frame
+        // count (the server drops in-betweens when a stormy loop would not fit).
+        int frame_ms = LOOP_MS / h.nframes;
+        if (frame_ms < 40) frame_ms = 40;
         for (int i = 0; i < h.nframes && s_state == RUN && !s_restart; i++) {
-            jpeg_draw_flash(slot, h.off[i], h.len[i], 0, 0, 256);
+            int64_t t0 = ms();
+            if (rdl_draw(slot, &h, i, 256) != ESP_OK) { s_restart = true; break; }
             board_draw_wait();
+            int took = (int)(ms() - t0);
+            draw_ms_sum += took; draws++;
+            if (draws == 200) { ESP_LOGI(TAG, "TIMING frame draw avg %d ms", (int)(draw_ms_sum / draws)); draws = 0; draw_ms_sum = 0; rdl_stats(); }
             s_shown_idx = i;
             if (!marked) { ota_mark_good(); marked = true; }
             if (!s_status_at || ms() - s_status_at > 60000) draw_status();
-            wait_events(i == h.nframes - 1 ? 1500 : 0);           // dwell on the latest frame
+            int left = (i == h.nframes - 1 ? DWELL_MS : frame_ms) - (int)(ms() - t0);
+            wait_events(left > 0 ? left : 0);
         }
     }
 }

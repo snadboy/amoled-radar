@@ -8,7 +8,7 @@
 
 static const char *TAG = "store";
 #define MAGIC   0x52445231u     // "RDR1"
-#define VERSION 1u
+#define VERSION 2u      // 2 = RDL1 loops (1 was per-frame JPEG; those slots are simply re-downloaded)
 
 static const esp_partition_t *s_part;
 static size_t s_slot_size;
@@ -18,6 +18,8 @@ static bool s_valid[STORE_SLOTS];
 static int s_writing = -1, s_pinned = -1;
 static char s_views[8][16];
 static int s_nviews = -1;          // -1 = not told yet: treat every view as live
+static esp_partition_mmap_handle_t s_mh[STORE_SLOTS];
+static const uint8_t *s_mp[STORE_SLOTS];
 
 static uint32_t base(int slot) { return (uint32_t)slot * s_slot_size; }
 
@@ -86,7 +88,10 @@ int store_begin(const char *view)
         if (s_valid[i]) current = live(s_hdr[i].view) && newest(s_hdr[i].view) == i;
         if (!current) pick = i;
     }
-    if (pick >= 0) { s_valid[pick] = false; s_writing = pick; }
+    if (pick >= 0) {
+        s_valid[pick] = false; s_writing = pick;
+        if (s_mp[pick]) { esp_partition_munmap(s_mh[pick]); s_mp[pick] = NULL; }   // never erase under a mapping
+    }
     xSemaphoreGive(s_mx);
     if (pick < 0) return -1;
     esp_err_t e = esp_partition_erase_range(s_part, base(pick), s_slot_size);
@@ -116,4 +121,25 @@ esp_err_t store_commit(int slot, loop_hdr_t *hdr)
     s_writing = -1;
     xSemaphoreGive(s_mx);
     return e;
+}
+
+const uint8_t *store_map(int slot)
+{
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    if (!s_mp[slot]) {
+        const void *ptr = NULL;
+        if (esp_partition_mmap(s_part, base(slot), s_slot_size, ESP_PARTITION_MMAP_DATA, &ptr, &s_mh[slot]) == ESP_OK)
+            s_mp[slot] = (const uint8_t *)ptr;
+        else ESP_LOGE(TAG, "mmap slot %d failed", slot);
+    }
+    const uint8_t *p = s_mp[slot];
+    xSemaphoreGive(s_mx);
+    return p;
+}
+
+void store_unmap(int slot)
+{
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+    if (s_mp[slot]) { esp_partition_munmap(s_mh[slot]); s_mp[slot] = NULL; }
+    xSemaphoreGive(s_mx);
 }
