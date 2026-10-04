@@ -4,7 +4,8 @@
 // profile and learns which apps and views the hub offers; cached in NVS for offline
 // boots) -> the saved or default app.
 //
-// Buttons: PWR = screen off/on, BOOT = next app, KEY = the active app's action.
+// Buttons: PWR = screen off/on, BOOT = next app (hold: identity card), KEY = the active
+// app's action.
 // The screen also follows the hub (/device/<id>/state: room occupancy and light).
 // A screen turned off by hand stays off until PWR: occupancy never wakes it. A
 // screen woken by hand in an empty room stays on for 10 minutes.
@@ -41,7 +42,7 @@ static const app_t *const APPS[] = { &APP_WEATHER, &APP_AIRCRAFT };
 #define OTA_MS        (6 * 60 * 60 * 1000)
 #define MANUAL_ON_MS  (10 * 60 * 1000)
 
-static char s_id[18];
+static char s_id[18], s_name[25];
 static bool s_enabled[NAPPS];
 static int s_cur = -1;
 static bool s_on = true, s_manual_off, s_marked;
@@ -193,6 +194,48 @@ static int first_app(cJSON *h)
     return pick;
 }
 
+// ---------------------------------------------------------------- identity
+// "Which board is this?" -- its hub name, MAC, IP and firmware, at boot and on a
+// BOOT hold. A raw app is stepped out of the way so LVGL can draw the card.
+static void identify(int dur_ms)
+{
+    const app_t *a = s_cur >= 0 ? APPS[s_cur] : NULL;
+    bool raw = a && a->raw;
+    if (raw) a->leave();
+    char ip[16], detail[96];
+    net_ip(ip);
+    snprintf(detail, sizeof(detail), "%s\n%s  -  fw %s", s_id, ip, esp_app_get_description()->version);
+    ui_lock(0);
+    lv_obj_t *card = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x101418), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(0x3fb7a0), 0);
+    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_radius(card, 20, 0);
+    lv_obj_set_style_pad_all(card, 20, 0);
+    lv_obj_set_style_pad_row(card, 8, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *t = lv_label_create(card);
+    lv_label_set_text(t, s_name);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(t, lv_color_white(), 0);
+    lv_obj_t *d = lv_label_create(card);
+    lv_label_set_text(d, detail);
+    lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(d, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(d, lv_color_hex(0xa8b0b8), 0);
+    lv_obj_center(card);
+    ui_unlock();
+    vTaskDelay(pdMS_TO_TICKS(dur_ms));
+    ui_lock(0);
+    lv_obj_delete(card);
+    ui_unlock();
+    if (raw) a->enter();
+}
+
 // ---------------------------------------------------------------- screen
 static void apply_brightness(void)
 {
@@ -258,6 +301,9 @@ void app_main(void)
     esp_netif_sntp_init(&sc);
 
     cJSON *h = hello();
+    const cJSON *nm = cJSON_GetObjectItem(h, "name");
+    strlcpy(s_name, cJSON_IsString(nm) ? nm->valuestring : "Display", sizeof(s_name));
+    identify(3000);                                     // which board is this?
     setup_apps(h);
     int first = first_app(h);
     cJSON_Delete(h);
@@ -270,7 +316,7 @@ void app_main(void)
         if (keys_get(&ev, pdMS_TO_TICKS(200))) {
             if (ev.btn == BTN_PWR) screen(!s_on, true);
             else if (!s_on) screen(true, true);                 // any button wakes a dark screen
-            else if (ev.btn == BTN_BOOT && ev.type == KEY_SHORT) next_app();
+            else if (ev.btn == BTN_BOOT) { if (ev.type == KEY_SHORT) next_app(); else identify(4000); }
             else APPS[s_cur]->key(ev);
         }
         if (s_on && !s_srv_on && ms() > s_manual_on_until) screen(false, false);

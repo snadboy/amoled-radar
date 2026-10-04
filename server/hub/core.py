@@ -3,6 +3,7 @@
   /device/hello?id=<mac>&board=&w=&h=&r=&panel=&psram=&slot=&fw=
                          register a device profile; returns its apps and views
   /device/<id>/state     screen on/off + brightness (same rules for every app)
+  /device/<id>/name?set=<name>   name a device; it shows the name on its identity card
   /devices.json          registered devices, for humans
   /firmware.json, /firmware.bin   OTA, legacy channel (amoled-radar firmware)
   /firmware/<channel>.json|.bin   OTA per channel (hub firmware: "hub")
@@ -48,6 +49,11 @@ def _seen(dev_id, ip, profile=None):
             d["profile"] = profile
             _save()
 
+def device_name(dev_id):
+    """Its given name, else 'Display' + the last 4 hex digits of its MAC."""
+    with _lock: name = _devices.get(dev_id, {}).get("name")
+    return name or "Display " + dev_id.replace(":", "")[-4:].upper()
+
 def device_state():
     """What the panel should do. Occupancy off for VACANT_OFF_S -> off. Brightness
     follows the room: the panel is never brighter than the room needs, which is the
@@ -89,12 +95,20 @@ def handle(h, p, q, apps):
         if not _ID_OK.match(dev_id):
             return h.json({"error": "bad or missing id"}, 400)
         _seen(dev_id, ip, {k: q[k] for k in PROFILE_KEYS if k in q})
-        return h.json({"id": dev_id, "default_app": apps[0].ID,
+        return h.json({"id": dev_id, "name": device_name(dev_id), "default_app": apps[0].ID,
                        "apps": [{"id": a.ID, "views": a.views()} for a in apps]})
     parts = p.split("/")                         # ['', 'device', '<id>', 'state']
     if len(parts) == 4 and parts[1] == "device" and parts[3] == "state" and _ID_OK.match(parts[2]):
         _seen(parts[2], ip)
         return h.json(device_state())
+    if len(parts) == 4 and parts[1] == "device" and parts[3] == "name" and _ID_OK.match(parts[2]):
+        name = q.get("set", "").strip()[:24]
+        with _lock:
+            if parts[2] not in _devices: return h.json({"error": "unknown device"}, 404)
+            if name: _devices[parts[2]]["name"] = name
+            else: _devices[parts[2]].pop("name", None)
+            _save()
+        return h.json({"id": parts[2], "name": device_name(parts[2])})
     if p == "/device.json":                      # legacy amoled-radar firmware: no id, key by IP
         _seen("ip:" + ip, ip)
         return h.json(device_state())

@@ -124,6 +124,13 @@ esp_err_t net_get(const char *url, uint8_t **out, size_t *out_len, size_t max_le
     return net_fetch(url, out, out_len, max_len, NULL);
 }
 
+void net_ip(char out[16])
+{
+    esp_netif_ip_info_t ip = {0};
+    esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &ip);
+    snprintf(out, 16, IPSTR, IP2STR(&ip.ip));
+}
+
 void net_mac(char out[18])
 {
     uint8_t m[6] = {0};

@@ -14,3 +14,4 @@ typedef esp_err_t (*net_sink_t)(void *ctx, const uint8_t *data, size_t n);
 esp_err_t net_stream(const char *url, net_sink_t sink, void *ctx, size_t *total);
 // WiFi STA MAC as aa:bb:cc:dd:ee:ff -- the device id the hub knows this board by.
 void net_mac(char out[18]);
+void net_ip(char out[16]);

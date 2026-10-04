@@ -27,10 +27,15 @@ One server for every small display: weather radar today, aircraft next (ported f
   `PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
 - **USB on sdevs** (pve-faraday VM 121): both pinned by physical port 2026-10-04 --
   `usb0: host=3-1.4.1` (weather board), `usb1: host=3-1.3` (aircraft board).
-  | Board | USB serial = MAC | Host port | sdevs | IP |
-  |---|---|---|---|---|
-  | #1 weather (radar fw) | D4:05:92:B8:F9:0C | 3-1.4.1 | /dev/ttyACM0 | .227 |
-  | #2 aircraft (hub fw) | 20:6E:F1:16:A1:00 | 3-1.3 | /dev/ttyACM1 | .221 |
+  | Hub name | Started as | USB serial = MAC | Host port | sdevs | IP |
+  |---|---|---|---|---|---|
+  | **Display 1** | weather board | D4:05:92:B8:F9:0C | 3-1.4.1 | /dev/ttyACM0 | .227 |
+  | **Display 2** | aircraft board | 20:6E:F1:16:A1:00 | 3-1.3 | /dev/ttyACM1 | .221 |
+  Both run the hub firmware (Display 1 migrated by OTA 2026-10-04). Names live in the hub's
+  devices.json (`/device/<id>/name?set=...`); each board shows an identity card (name, MAC, IP,
+  fw) for 3 s at boot and on a BOOT hold. Say "Display 1/2" to the owner, never "#1/#2".
+  Open question: on Display 2, no press has ever registered as KEY (GPIO10); the owner's "key"
+  presses arrive as BOOT. Labels vs pins on its case not yet confirmed.
   Opening the serial port can reset a board. Logs: a pyserial read inside the IDF container
   (the ports are root:dialout and snadboy is not in dialout).
 - Bedrock still runs the old `ghcr.io/snadboy/amoled-radar:c3eba80` (no host port); moving its
