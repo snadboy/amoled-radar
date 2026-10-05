@@ -96,6 +96,12 @@ One server for every small display: weather radar today, aircraft next (ported f
   commands in the reply. Tested end to end with a local Mosquitto + Display 2. Deployed:
   hub 760e931 (docker-homelab bf1c430, via the Dockhand API); both displays on firmware
   760e931-10051234.
+  Verified in HA 2026-10-05: devices `Display 1/2` + `Display Hub`; select.display_2_app switched
+  the display both ways in < 10 s. Admin Test buttons now test the typed values (blank = saved),
+  hub f1ac99a (docker-homelab 9f0287a).
+- **Open items:** P4 3.5" board bring-up when it arrives (install page first; chip revision,
+  rotation flags unverified); owner to rename the displays and delete the six Dockhand stack
+  variables (hub.db has them now); rotate DOCKHAND_API_TOKEN (it was pasted into a chat).
 - **USB on sdevs** (pve-faraday VM 121): both pinned by physical port 2026-10-04 --
   `usb0: host=3-1.4.1` (weather board), `usb1: host=3-1.3` (aircraft board).
   | Hub name | Started as | USB serial = MAC | Host port | sdevs | IP |
