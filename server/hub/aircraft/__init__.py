@@ -52,6 +52,14 @@ def _poller(view):
             threading.Thread(target=p.run, daemon=True).start()
         return p
 
+def snapshots():
+    """{view id: poller snapshot + status name} for the views being polled (for MQTT)."""
+    with _plock: pollers = dict(_pollers)
+    return {vid: dict(p.snapshot(), status_name=opensky.ST_NAMES[p.snapshot()["status"]]) for vid, p in pollers.items()}
+
+def miles_from(view, ac):
+    return opensky.miles_between(view["lat"], view["lon"], ac["lat"], ac["lon"])
+
 def view_summary(view, start_level=0):
     """How a device sees its aircraft view (in /device/hello)."""
     return dict({k: view[k] for k in ("id", "name", "lat", "lon", "radius_mi", "levels")}, start_level=start_level)

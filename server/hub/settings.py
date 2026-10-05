@@ -17,11 +17,13 @@ import json, os, sqlite3, threading, zlib
 CACHE = os.environ.get("HUB_CACHE", os.environ.get("RADAR_CACHE", "/tmp/hub-cache"))
 DB_PATH = os.path.join(CACHE, "hub.db")
 
-SECRET_KEYS = ("hass_url", "hass_token", "opensky_client_id", "opensky_client_secret")
+SECRET_KEYS = ("hass_url", "hass_token", "opensky_client_id", "opensky_client_secret",
+               "mqtt_url", "mqtt_user", "mqtt_password")
 APPS = ("weather", "aircraft")               # in firmware order: BOOT steps through them
 
 # A room's screen policy, used for any device that doesn't set its own.
 DEFAULT_SCREEN = {
+    "mode": "auto",               # auto = the room's sensors decide; on / off = forced (e.g. from HA)
     "occupancy": "binary_sensor.upstairs_office_lwr02_occupancy",
     "lux": "sensor.upstairs_office_lwr02_illuminance",
     "vacant_off_min": 5,          # room empty this long -> screen off

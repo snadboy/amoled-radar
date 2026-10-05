@@ -83,7 +83,8 @@ def _clean_device(d):
         if k in d: out[k] = d[k]
     if "screen" in d:
         s = d["screen"]
-        out["screen"] = {"occupancy": str(s.get("occupancy") or ""), "lux": str(s.get("lux") or ""),
+        out["screen"] = {"mode": s.get("mode") if s.get("mode") in ("auto", "on", "off") else "auto",
+                         "occupancy": str(s.get("occupancy") or ""), "lux": str(s.get("lux") or ""),
                          "vacant_off_min": _num(s.get("vacant_off_min", 5), 0, 1440, "minutes empty"),
                          "bright_min": int(_num(s.get("bright_min", 140), 1, 255, "minimum brightness")),
                          "bright_max": int(_num(s.get("bright_max", 255), 1, 255, "maximum brightness")),
@@ -95,8 +96,8 @@ def _state():
     devs = []
     for d in settings.devices():
         s = core.seen(d["id"])
-        devs.append(dict(d, ip=s.get("ip"), last_seen=s.get("last_seen"),
-                         online=bool(s.get("last_seen")) and now - s["last_seen"] < 90))
+        devs.append(dict(d, ip=s.get("ip"), last_seen=s.get("last_seen"), online=core.online(d["id"]),
+                         showing=dict(app=s.get("app"), view=s.get("view"), on=s.get("on"), bright=s.get("bright"))))
     return {"secrets": settings.secrets_set(), "places": settings.places(), "views": settings.air_views(),
             "devices": devs, "apps": list(settings.APPS)}
 
@@ -137,6 +138,9 @@ def handle(h, method, p, q, body, apps):
             return h.json(_state())
         if method == "POST" and parts[:1] == ["test"] and len(parts) == 2:
             if parts[1] == "ha": ok, msg = ha.test()
+            elif parts[1] == "mqtt":
+                from . import mqtt
+                ok, msg = mqtt.test()
             elif parts[1] == "opensky":
                 from .aircraft import opensky
                 ok, msg = opensky.test()

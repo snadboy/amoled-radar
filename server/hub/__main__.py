@@ -11,7 +11,7 @@ and preview_png().
 import json, os, sys, threading, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import admin, aircraft, core, weather
+from . import admin, aircraft, core, mqtt, weather
 
 PORT = int(os.environ.get("PORT", "8080"))
 ADMIN_PORT = int(os.environ.get("ADMIN_PORT", "8081"))
@@ -79,6 +79,7 @@ class AdminH(H):
 if __name__ == "__main__":
     for a in APPS:
         a.start()
+    mqtt.start(APPS)                    # HA discovery + control; idle until a broker is set
     threading.Thread(target=Server(("0.0.0.0", ADMIN_PORT), AdminH).serve_forever, daemon=True).start()
     print("display-hub serving devices on :%d, admin on :%d  apps=%s"
           % (PORT, ADMIN_PORT, ",".join(a.ID for a in APPS)), flush=True)

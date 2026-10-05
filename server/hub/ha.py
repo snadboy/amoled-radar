@@ -1,6 +1,6 @@
 """Home Assistant REST access, shared by every app. The hub holds the HA URL and token
 (admin page -> settings) so devices never need them."""
-import json, urllib.request
+import json, threading, time, urllib.request
 from datetime import datetime
 
 from . import settings
@@ -13,17 +13,25 @@ def _get(path, timeout=10):
     r = urllib.request.Request(base + path, headers={"Authorization": "Bearer " + tok})
     return json.loads(urllib.request.urlopen(r, timeout=timeout).read())
 
+_cache, _clock = {}, threading.Lock()
+CACHE_S = 5                     # devices poll every few seconds; one HA read serves them all
+
 def ha_entity(eid):
-    """(state, last_changed epoch) for any HA entity, or (None, None)."""
+    """(state, last_changed epoch) for any HA entity, or (None, None). Cached CACHE_S."""
     if not (eid and configured()):
         return None, None
+    with _clock:
+        hit = _cache.get(eid)
+        if hit and time.time() - hit[0] < CACHE_S: return hit[1]
     try:
         st = _get("/api/states/" + eid)
         lc = datetime.fromisoformat(st["last_changed"].replace("Z", "+00:00")).timestamp()
-        return st["state"], lc
+        val = (st["state"], lc)
     except Exception as e:
         print("    HA %s unavailable (%s)" % (eid, str(e)[:40]))
-        return None, None
+        val = (None, None)
+    with _clock: _cache[eid] = (time.time(), val)
+    return val
 
 def entities(domain=None):
     """Entity ids (optionally of one domain) for the admin page's pickers."""

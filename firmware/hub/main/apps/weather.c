@@ -337,7 +337,20 @@ static void app_screen(bool on)
     if (on) xTaskNotifyGive(s_draw); else wait_idle();
 }
 
+static const char *app_current(void) { return s_views[s_cur].id; }
+
+static void app_show(const char *view)
+{
+    for (int i = 0; i < s_nviews; i++)
+        if (!strcmp(s_views[i].id, view) && i != s_cur) {
+            s_cur = i; s_view_changed = true;            // the sync task fetches it first if needed
+            s_restart = true; s_status_at = 0; s_shown_idx = -1;
+            ESP_LOGI(TAG, "view -> %s (hub)", view);
+        }
+}
+
 const app_t APP_WEATHER = {
     .id = "weather", .name = "Weather", .store_prefix = 'w', .raw = true,
     .init = app_init, .enter = app_enter, .leave = app_leave, .key = app_key, .screen = app_screen,
+    .current = app_current, .show = app_show,
 };

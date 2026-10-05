@@ -17,6 +17,8 @@ typedef struct {
     void (*leave)(void);
     void (*key)(key_ev_t ev);
     void (*screen)(bool on);      // the active app's screen went on/off (stop/resume fetching)
+    const char *(*current)(void); // the view it shows now (reported to the hub -> HA)
+    void (*show)(const char *view);   // switch to a view now (from HA); unknown ids are ignored
 } app_t;
 
 // Services the core offers apps.

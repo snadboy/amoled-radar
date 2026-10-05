@@ -924,7 +924,11 @@ static void app_screen(bool on)
     if (on) xTaskNotifyGive(s_net);
 }
 
+static const char *app_current(void) { return s_view; }
+static void app_show(const char *view) {}            // one view per device
+
 const app_t APP_AIRCRAFT = {
     .id = "aircraft", .name = "Aircraft", .store_prefix = 'a',
     .init = app_init, .enter = app_enter, .leave = app_leave, .key = app_key, .screen = app_screen,
+    .current = app_current, .show = app_show,
 };

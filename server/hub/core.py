@@ -4,8 +4,12 @@ changed on the admin page (admin.py), never over the LAN port.
   /device/hello?id=<mac>&board=&w=&h=&r=&panel=&psram=&slot=&fw=
                          register a device profile; returns its name, apps, the places
                          and view it shows, where it starts, and a boot-settings version
-  /device/<id>/state     screen on/off + brightness from its room's sensors, its name,
-                         and the boot-settings version (changed -> the device restarts)
+  /device/<id>/state?app=&view=&on=&bright=
+                         the device reports what it shows; the reply has screen on/off +
+                         brightness (room sensors, or forced by the screen mode), its name,
+                         the boot-settings version (changed -> restart), the poll interval,
+                         and at most one pending command (switch app/city, restart, identify),
+                         delivered once -- a restart must not be re-sent to the rebooted device
   /devices.json          registered devices, for humans (no settings, no secrets)
   /firmware.json, /firmware.bin   OTA, legacy channel (amoled-radar firmware)
   /firmware/<channel>.json|.bin   OTA per channel ("hub" = C6 boards, "hub-p4" = P4)
@@ -22,14 +26,35 @@ FIRMWARE_DIR = os.environ.get("RADAR_FIRMWARE_DIR", os.path.join(CACHE, "firmwar
 PROFILE_KEYS = ("board", "w", "h", "r", "panel", "psram", "slot", "fw")
 _ID_OK = re.compile(r"^[0-9A-Za-z:_.-]{1,40}$")
 
+POLL_S = 5                      # device state poll: quick enough for HA controls to feel live
+
 _lock = threading.Lock()
-_seen = {}                      # device id -> {"last_seen", "ip"}: in memory, not worth a DB write per poll
+_seen = {}                      # device id -> {"last_seen", "ip", "app", "view", "on", "bright"}: in memory
+_cmds = {}                      # device id -> pending command {"id", ...}; newest wins, delivered once
+_cmd_id = int(time.time()) & 0xFFFFFF
 
 def seen(dev_id):
     with _lock: return dict(_seen.get(dev_id, {}))
 
-def _touch(dev_id, ip):
-    with _lock: _seen[dev_id] = {"last_seen": int(time.time()), "ip": ip}
+def _touch(dev_id, ip, q=None):
+    with _lock:
+        d = _seen.setdefault(dev_id, {})
+        d.update(last_seen=int(time.time()), ip=ip)
+        for k in ("app", "view"):
+            if q and q.get(k): d[k] = q[k][:24]
+        for k in ("on", "bright"):
+            if q and q.get(k, "").isdigit(): d[k] = int(q[k])
+
+def online(dev_id):
+    s = seen(dev_id)
+    return bool(s.get("last_seen")) and time.time() - s["last_seen"] < 3 * POLL_S + 30
+
+def command(dev_id, **cmd):
+    """Queue a command for the device's next poll (merged into any still pending)."""
+    global _cmd_id
+    with _lock:
+        _cmd_id += 1
+        _cmds[dev_id] = dict(_cmds.get(dev_id, {}), id=_cmd_id, **cmd)
 
 def profiles():
     """Display profiles of the registered devices (as reported in /device/hello)."""
@@ -39,12 +64,17 @@ def device_state(screen):
     """What the panel should do, from its room's sensors (a device's "screen" settings).
     Empty for vacant_off_min -> off. Brightness follows the room's light: the panel is
     never brighter than the room needs, the second-biggest burn-in lever after being off."""
-    occ, since = ha_entity(screen.get("occupancy"))
+    mode = screen.get("mode", "auto")
+    occ, since = ha_entity(screen.get("occupancy")) if mode == "auto" else (None, None)
     lux_s, _ = ha_entity(screen.get("lux"))
     try: lux = float(lux_s)
     except (TypeError, ValueError): lux = None
     display, reason = "on", "occupied"
-    if occ == "off" and since and time.time() - since >= 60 * float(screen.get("vacant_off_min", 5)):
+    if mode == "off":
+        display, reason = "off", "screen mode off"
+    elif mode == "on":
+        reason = "screen mode on"
+    elif occ == "off" and since and time.time() - since >= 60 * float(screen.get("vacant_off_min", 5)):
         display, reason = "off", "room empty %d min" % ((time.time() - since) // 60)
     elif occ is None:
         reason = "occupancy unknown -- staying on"
@@ -94,9 +124,12 @@ def handle(h, p, q, apps):
         return h.json(hello_reply(settings.device(dev_id), apps))
     parts = p.split("/")                         # ['', 'device', '<id>', 'state']
     if len(parts) == 4 and parts[1] == "device" and parts[3] == "state" and _ID_OK.match(parts[2]):
-        _touch(parts[2], ip)
+        _touch(parts[2], ip, q)
         dev = settings.device(parts[2])
-        return h.json(dict(device_state(dev["screen"]), name=dev["name"], sv=settings.boot_version(dev)))
+        reply = dict(device_state(dev["screen"]), name=dev["name"], sv=settings.boot_version(dev), poll_s=POLL_S)
+        with _lock:
+            if parts[2] in _cmds: reply["cmd"] = _cmds.pop(parts[2])
+        return h.json(reply)
     if p == "/device.json":                      # legacy amoled-radar firmware: no id
         return h.json(device_state(settings.default_screen()))
     if p == "/devices.json":

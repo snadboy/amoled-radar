@@ -8,7 +8,8 @@ RUN apt-get update \
 
 # numpy + OpenCV for optical-flow in-between frames (the headless wheel needs no GUI libs);
 # tzdata so per-city clocks never depend on what the slim base image happens to ship
-RUN pip install --no-cache-dir "pillow>=10.2,<12" "numpy>=1.26,<3" "opencv-python-headless>=4.9,<5" tzdata
+# paho-mqtt: Home Assistant discovery + control (hub/mqtt.py)
+RUN pip install --no-cache-dir "pillow>=10.2,<12" "numpy>=1.26,<3" "opencv-python-headless>=4.9,<5" tzdata "paho-mqtt>=2.1,<3"
 
 WORKDIR /app
 COPY hub ./hub

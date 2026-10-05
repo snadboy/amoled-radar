@@ -26,6 +26,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "improv.h"
 #include "keys.h"
@@ -43,13 +44,17 @@ static const app_t *const APPS[] = { &APP_WEATHER, &APP_AIRCRAFT };
 #define NAPPS ((int)(sizeof(APPS) / sizeof(APPS[0])))
 
 #define URL_MAX       256
-#define STATE_MS      (30 * 1000)
+#define STATE_MS      (30 * 1000)    // until the hub says otherwise (poll_s)
 #define OTA_FIRST_MS  (90 * 1000)
 #define OTA_MS        (6 * 60 * 60 * 1000)
 #define MANUAL_ON_MS  (10 * 60 * 1000)
 
 static char s_id[18], s_name[25];
 static uint32_t s_sv;                // boot-settings version this boot started from
+static volatile int s_state_ms = STATE_MS;
+// A command from the hub (HA's App / City / Identify), picked up by the main loop.
+static SemaphoreHandle_t s_cmd_mx;
+static struct { bool pending, identify; char app[16], view[16]; } s_cmd;
 static bool s_enabled[NAPPS];
 static int s_cur = -1;
 static bool s_on = true, s_manual_off, s_marked;
@@ -268,7 +273,9 @@ static void screen(bool on, bool manual)
 static void poll_state(void)
 {
     char url[URL_MAX]; uint8_t *js; size_t len;
-    snprintf(url, sizeof(url), "%s/device/%s/state", hub_url(), s_id);
+    const app_t *a = s_cur >= 0 ? APPS[s_cur] : NULL;
+    snprintf(url, sizeof(url), "%s/device/%s/state?app=%s&view=%s&on=%d&bright=%d", hub_url(), s_id,
+             a ? a->id : "", a ? a->current() : "", s_on, s_applied_bright < 0 ? 0 : s_applied_bright);
     if (net_get(url, &js, &len, 4096) != ESP_OK) return;
     cJSON *d = cJSON_Parse((char *)js);
     free(js);
@@ -281,6 +288,22 @@ static void poll_state(void)
         ESP_LOGI(TAG, "renamed: %s", s_name);
     }
     uint32_t v = cJSON_IsNumber(sv) ? (uint32_t)sv->valuedouble : 0;
+    const cJSON *ps = cJSON_GetObjectItem(d, "poll_s");
+    if (cJSON_IsNumber(ps) && ps->valueint >= 2 && ps->valueint <= 120) s_state_ms = ps->valueint * 1000;
+    const cJSON *cmd = cJSON_GetObjectItem(d, "cmd");
+    if (cJSON_IsObject(cmd)) {
+        if (cJSON_IsTrue(cJSON_GetObjectItem(cmd, "restart"))) {
+            ESP_LOGW(TAG, "restart requested by the hub");
+            cJSON_Delete(d); vTaskDelay(pdMS_TO_TICKS(200)); esp_restart();
+        }
+        const cJSON *ca = cJSON_GetObjectItem(cmd, "app"), *cv = cJSON_GetObjectItem(cmd, "view");
+        xSemaphoreTake(s_cmd_mx, portMAX_DELAY);
+        strlcpy(s_cmd.app, cJSON_IsString(ca) ? ca->valuestring : "", sizeof(s_cmd.app));
+        strlcpy(s_cmd.view, cJSON_IsString(cv) ? cv->valuestring : "", sizeof(s_cmd.view));
+        s_cmd.identify = cJSON_IsTrue(cJSON_GetObjectItem(cmd, "identify"));
+        s_cmd.pending = true;
+        xSemaphoreGive(s_cmd_mx);
+    }
     cJSON_Delete(d);
     if (v && v != s_sv) {                // apps / starting points changed: start over from them
         ESP_LOGW(TAG, "boot settings changed (%lu -> %lu): restarting", (unsigned long)s_sv, (unsigned long)v);
@@ -294,7 +317,7 @@ static void bg_task(void *arg)
     int64_t state_at = 0, ota_at = 0;
     for (;;) {
         int64_t now = ms();
-        if (!state_at || now - state_at > STATE_MS) { poll_state(); state_at = ms(); }
+        if (!state_at || now - state_at > s_state_ms) { poll_state(); state_at = ms(); }
         if (now > OTA_FIRST_MS && (!ota_at || now - ota_at > OTA_MS)) { ota_at = ms(); ota_check(); }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -323,9 +346,25 @@ static void wifi_setup_screen(void)
     ui_lock(0); lv_obj_delete(l); ui_unlock();
 }
 
+// A command from the hub, on the main task (it owns app switching and the identity card).
+static void run_command(void)
+{
+    xSemaphoreTake(s_cmd_mx, portMAX_DELAY);
+    char app[16], view[16]; bool ident = s_cmd.identify;
+    strlcpy(app, s_cmd.app, sizeof(app)); strlcpy(view, s_cmd.view, sizeof(view));
+    s_cmd.pending = false;
+    xSemaphoreGive(s_cmd_mx);
+    ESP_LOGI(TAG, "hub command: app=%s view=%s identify=%d", app, view, ident);
+    for (int i = 0; i < NAPPS && app[0]; i++)
+        if (s_enabled[i] && !strcmp(APPS[i]->id, app)) switch_to(i, true);
+    if (view[0] && s_cur >= 0) APPS[s_cur]->show(view);
+    if (ident && s_on) identify(4000);
+}
+
 // ---------------------------------------------------------------- main
 void app_main(void)
 {
+    s_cmd_mx = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(board_init());
     keys_start();
     ESP_ERROR_CHECK(store_init());
@@ -362,6 +401,7 @@ void app_main(void)
             else if (ev.btn == BTN_BOOT) { if (ev.type == KEY_SHORT) next_app(); else identify(4000); }
             else APPS[s_cur]->key(ev);
         }
+        if (s_cmd.pending) run_command();
         if (s_on && !s_srv_on && ms() > s_manual_on_until) screen(false, false);
         else if (!s_on && !s_manual_off && s_srv_on) screen(true, false);
         if (s_on) apply_brightness();

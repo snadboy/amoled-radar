@@ -106,6 +106,15 @@
         <div class="actions"><button class="b primary" onclick="saveSecrets(['opensky_client_id','opensky_client_secret'])">Save</button>
           <button class="b" onclick="testConn('opensky', 'm_os')">Test</button><span class="msg" id="m_os"></span></div>
       </div>
+      <div class="card">
+        <h3>MQTT (Home Assistant devices)</h3>
+        <p class="meta">Each display appears in HA with App, City, Screen, Brightness, Restart and Identify; the hub adds aircraft and weather sensors. Leave the URL empty to turn this off.</p>
+        <label>Broker URL <span id="s_mqtt_url"></span></label><input id="mqtt_url" placeholder="mqtt://host-ha.isnadboy.com:1883">
+        <label>User <span id="s_mqtt_user"></span></label><input id="mqtt_user" autocomplete="off">
+        <label>Password <span id="s_mqtt_password"></span></label><input id="mqtt_password" type="password" autocomplete="off">
+        <div class="actions"><button class="b primary" onclick="saveSecrets(['mqtt_url','mqtt_user','mqtt_password'])">Save</button>
+          <button class="b" onclick="testConn('mqtt', 'm_mq')">Test</button><span class="msg" id="m_mq"></span></div>
+      </div>
     </div>
     <p class="hint">Saved values are never shown again. Leave a field blank to keep what is saved.</p>
   </section>
@@ -174,7 +183,8 @@ function render() {
     const c = document.createElement("div"); c.className = "card"; c.dataset.id = d.id;
     c.innerHTML = `
       <h3>${esc(d.name)} <span class="badge ${d.online ? "ok" : "bad"}">${d.online ? "online" : "offline"}</span></h3>
-      <div class="meta">${esc(pr.board || "?")} · ${esc(pr.w)}×${esc(pr.h)} ${esc(pr.panel || "")} · fw ${esc(pr.fw || "?")}<br>${esc(d.id)} · ${esc(d.ip || "–")} · seen ${ago(d.last_seen)}</div>
+      <div class="meta">${esc(pr.board || "?")} · ${esc(pr.w)}×${esc(pr.h)} ${esc(pr.panel || "")} · fw ${esc(pr.fw || "?")}<br>${esc(d.id)} · ${esc(d.ip || "–")} · seen ${ago(d.last_seen)}
+        ${d.online && d.showing.app ? `<br>now: ${d.showing.app == "weather" ? "Weather · " + esc((S.places.find(p => p.id == d.showing.view) || {}).name || d.showing.view) : "Aircraft"} · screen ${d.showing.on ? "on" : "off"}` : ""}</div>
       <img class="preview" loading="lazy" alt="what it shows at start" src="api/devices/${encodeURIComponent(d.id)}/preview.png?t=${Date.now()}" onerror="this.style.display='none'">
       <label>Name</label><input data-k="name" value="${d.named ? esc(d.name) : ""}" placeholder="${esc(d.name)}">
       <fieldset><legend>Apps</legend>
@@ -190,6 +200,7 @@ function render() {
         <div><label>Starting zoom</label><select data-k="level">${levels.map((l, i) => `<option value="${i}" ${d.aircraft.start_level == i ? "selected" : ""}>${l} mi</option>`).join("")}</select></div></div>
       </fieldset>
       <fieldset><legend>Screen (this room)</legend>
+        <label>Mode</label><select data-s="mode">${["auto", "on", "off"].map(m => `<option value="${m}" ${d.screen.mode == m ? "selected" : ""}>${{auto: "Auto: follow the room's sensors", on: "Always on", off: "Off"}[m]}</option>`).join("")}</select>
         <label>Occupancy sensor</label><input data-s="occupancy" list="dl_binary" value="${esc(d.screen.occupancy)}">
         <label>Light sensor (lux)</label><input data-s="lux" list="dl_sensor" value="${esc(d.screen.lux)}">
         <div class="row3"><div><label>Off after (min)</label><input data-s="vacant_off_min" value="${d.screen.vacant_off_min}"></div>
