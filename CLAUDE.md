@@ -115,6 +115,22 @@ One server for every small display: weather radar today, aircraft next (ported f
   Hub 99e19ef (docker-homelab bump deployed via the Dockhand API). Unverified on the glass:
   colour order/inversion and mirror (BGR + invert + mirror X, as Espressif's example), aircraft
   app layout at 240 round.
+  3-slot store: `store_begin(key, urgent)` -- with no free slot, the view ON SCREEN may evict
+  the oldest unmapped bundle (weather only while active; otherwise the round board kept
+  playing its old strip-height loops).
+- **Panning (2026-10-05, hub 63a5ea4, firmware d701880 on all three displays via OTA):**
+  view ids `<view>@<dx>,<dy>` (50 mi steps east/north; helpers `core.parse_pan/pan_label/
+  pan_centre`). Weather: up to 3 steps, rendered on demand per profile on `pan_loop` (~20 s),
+  kept 15 min after the last request; offset pill burned into frames (tap the top 80 px =
+  home); `/weather/ui/pan.jpg` "Loading..." pill over the dimmed last frame. Aircraft: 1 step;
+  poller box = radius + 71 mi while <= 25 sq deg (still 1 OpenSky credit), states cut to each
+  view's radius (`_within`); panned maps: home mark, no rings, header lat/lon = real home.
+  Firmware: weather swipes judged on release (50 px); aircraft LVGL LV_EVENT_GESTURE on
+  s_radar (GESTURE_BUBBLE cleared) + amber offset pill, maps staged by the net task and
+  adopted by the UI tick (live swap, no restart). Auto home after 10 min; city change resets.
+  HA: per-display Pan select (Centred + 8 directions at 50 mi). Store keys for pans:
+  `w:~<vi><dx+'d'><dy+'d'>`, `a:~<dx><dy><view>`. Verified via HA on Display 60FC (weather
+  and aircraft); swipes on the C6 touch boards not yet tried by the owner.
 - **Open items:** P4 3.5" board bring-up when it arrives (install page first; chip revision,
   rotation flags unverified); owner to rename the displays and delete the six Dockhand stack
   variables (hub.db has them now); rotate DOCKHAND_API_TOKEN (it was pasted into a chat).
