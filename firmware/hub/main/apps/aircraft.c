@@ -120,6 +120,7 @@ static int64_t s_batch_ms;
 static bool s_labels_flip;                // a tap on empty map flips the zoom rule until the next zoom
 static int s_labels_mi = 999;             // labels at this zoom (mi) or closer; 0 = never (hub setting)
 static int s_trail_pts = 2;               // unselected planes' trail, in polls (~30 s each); hub setting
+static char s_types[48];                  // "&types=airline,private" when not every kind is shown
 static uint32_t s_selected;
 static volatile bool s_active, s_screen_on = true;
 static TaskHandle_t s_net;
@@ -768,8 +769,9 @@ static void fetch_states(void)
     static uint32_t seq;
     char url[URL_MAX], id[24]; uint8_t *b; size_t len; int status;
     vid_of(s_dx, s_dy, id);
-    if (have_seq) snprintf(url, sizeof(url), "%s/aircraft/%s/states.bin?since=%lu", hub_url(), id, (unsigned long)seq);
-    else snprintf(url, sizeof(url), "%s/aircraft/%s/states.bin", hub_url(), id);
+    char since[12] = "";                   // empty: send everything
+    if (have_seq) snprintf(since, sizeof(since), "%lu", (unsigned long)seq);
+    snprintf(url, sizeof(url), "%s/aircraft/%s/states.bin?since=%s%s", hub_url(), id, since, s_types);
     if (net_fetch(url, &b, &len, 20 + 48 * 256, &status) != ESP_OK) {
         if (status != 304) s_status = ST_HUB_DOWN;
         return;
@@ -1003,6 +1005,14 @@ static void app_init(const cJSON *views)
     const cJSON *lm = cJSON_GetObjectItem(v, "labels_mi");
     if (cJSON_IsNumber(lm)) s_labels_mi = lm->valueint;
     const cJSON *tr = cJSON_GetObjectItem(v, "trail_s");      // the hub polls OpenSky every ~30 s
+    const cJSON *ty = cJSON_GetObjectItem(v, "types"), *k;
+    if (cJSON_IsArray(ty) && cJSON_GetArraySize(ty) < 4) {   // the hub filters: airline, business, private, other
+        strlcpy(s_types, "&types=", sizeof(s_types));
+        cJSON_ArrayForEach(k, ty) if (cJSON_IsString(k)) {
+            if (s_types[7]) strlcat(s_types, ",", sizeof(s_types));
+            strlcat(s_types, k->valuestring, sizeof(s_types));
+        }
+    }
     if (cJSON_IsNumber(tr)) s_trail_pts = tr->valueint / 30 > TRAIL_POINTS ? TRAIL_POINTS : tr->valueint / 30;
     s_info_mx = xSemaphoreCreateMutex();
     ui_lock(0);

@@ -10,7 +10,8 @@ Endpoints
   /aircraft/views.json                   [{id, name, lat, lon, radius_mi, levels}]
   /aircraft/<view>/manifest.json?w=&h=&r=  bundle id/size, centre, per-level scale + rings
   /aircraft/<view>/bundle.bin?w=&h=&r=     backgrounds for every zoom level (see basemap.py)
-  /aircraft/<view>/states.bin?since=<seq>  binary states (below); 304 if seq unchanged
+  /aircraft/<view>/states.bin?since=<seq>&types=airline,private  binary states (below); 304
+                                         if seq unchanged; types: lookup.kind() classes to keep
   /aircraft/<view>/states.json             the same, readable
   /aircraft/<view>/preview.png?w=&h=&r=&level=   what a device should show now
   /aircraft/info/<icao>?cs=&lat=&lon=      type, registration, owner, vetted route
@@ -79,10 +80,10 @@ def air_view(vid):
 def miles_from(view, ac):
     return opensky.miles_between(view["lat"], view["lon"], ac["lat"], ac["lon"])
 
-def view_summary(view, start_level=0, labels_mi=50, trail_s=60):
+def view_summary(view, start_level=0, labels_mi=50, trail_s=60, types=lookup.KINDS):
     """How a device sees its aircraft view (in /device/hello)."""
     return dict({k: view[k] for k in ("id", "name", "lat", "lon", "radius_mi", "levels")},
-                start_level=start_level, labels_mi=labels_mi, trail_s=trail_s)
+                start_level=start_level, labels_mi=labels_mi, trail_s=trail_s, types=list(types))
 
 def start():
     lookup.start()
@@ -256,6 +257,9 @@ def handle(h, p, q):
     if what in ("states.bin", "states.json"):
         poller.touch()
         s = _within(view, poller.snapshot())
+        kinds = set(q.get("types", "").split(",")) & set(lookup.KINDS)   # the device's setting; none = all
+        if kinds and kinds != set(lookup.KINDS):
+            s = dict(s, aircraft=[a for a in s["aircraft"] if lookup.kind(a["callsign"]) in kinds])
         if what == "states.json":
             return h.json(_states_json(s))
         if q.get("since") == str(s["seq"]):

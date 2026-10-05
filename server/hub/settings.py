@@ -165,6 +165,7 @@ def _delete(table, doc_id):
 # "active" is built in: the weather app moves it to the strongest storm near home (the
 # first real place) every radar cycle; it is never stored and can't be edited.
 ACTIVE = "active"
+AIR_KINDS = ("airline", "business", "private", "other")     # aircraft.lookup.KINDS
 
 def places():
     real = _docs("places")
@@ -226,7 +227,9 @@ def device(dev_id):
                      # 0 = never (a tapped plane still gets its label and details)
                      "labels_mi": int(a["labels_mi"]) if str(a.get("labels_mi", "")).isdigit() else small_labels,
                      # trail behind each unselected plane, seconds (0 = none; a tapped plane shows its whole trail)
-                     "trail_s": int(a["trail_s"]) if str(a.get("trail_s", "")).isdigit() else small_trail},
+                     "trail_s": int(a["trail_s"]) if str(a.get("trail_s", "")).isdigit() else small_trail,
+                     # which flights to show (aircraft.lookup.kind): airline, business, private, other
+                     "types": [k for k in a.get("types", AIR_KINDS) if k in AIR_KINDS] or list(AIR_KINDS)},
         "screen": dict(default_screen(), **d.get("screen", {})),
         "profile": d.get("profile", {}),
     }

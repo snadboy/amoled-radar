@@ -47,6 +47,20 @@ def is_private(cs):
     """US private flights use the registration as callsign; no route exists."""
     return bool(re.match(r"^N\d", cs or ""))
 
+# Fractional / charter business-jet operators: airline-style callsigns, but not airlines.
+BUSINESS = {"EJA", "LXJ", "XOJ", "JTZ", "TWY", "EJM", "VJT", "VJA", "FWK", "GAJ", "JRE", "KOW",
+            "PJC", "CNS", "DPJ", "WWI", "XSR", "SIS", "TMC", "BVR", "PBR", "LEA", "JAS", "NJE"}
+KINDS = ("airline", "business", "private", "other")
+
+def kind(cs):
+    """What a callsign says the flight is (OpenSky's category field is almost always empty):
+    airline = ICAO airline code + flight number (cargo included); business = the fractional
+    and charter operators above; private = a US registration; other = no callsign or anything else."""
+    cs = cs or ""
+    if is_private(cs): return "private"
+    if re.match(r"^[A-Z]{3}\d", cs): return "business" if cs[:3] in BUSINESS else "airline"
+    return "other"
+
 def _adsbdb(icao, cs):
     """(aircraft dict or None, route candidate or None)."""
     base = "https://api.adsbdb.com/v0/aircraft/%06X" % icao
