@@ -96,7 +96,7 @@
         <label>URL <span id="s_hass_url"></span></label><input id="hass_url" placeholder="http://homeassistant.local:8123">
         <label>Long-lived access token <span id="s_hass_token"></span></label><input id="hass_token" type="password" autocomplete="off">
         <div class="actions"><button class="b primary" onclick="saveSecrets(['hass_url','hass_token'])">Save</button>
-          <button class="b" onclick="testConn('ha', 'm_ha')">Test</button><span class="msg" id="m_ha"></span></div>
+          <button class="b" onclick="testConn('ha', 'm_ha', ['hass_url','hass_token'])">Test</button><span class="msg" id="m_ha"></span></div>
       </div>
       <div class="card">
         <h3>OpenSky Network</h3>
@@ -104,7 +104,7 @@
         <label>Client id <span id="s_opensky_client_id"></span></label><input id="opensky_client_id" autocomplete="off">
         <label>Client secret <span id="s_opensky_client_secret"></span></label><input id="opensky_client_secret" type="password" autocomplete="off">
         <div class="actions"><button class="b primary" onclick="saveSecrets(['opensky_client_id','opensky_client_secret'])">Save</button>
-          <button class="b" onclick="testConn('opensky', 'm_os')">Test</button><span class="msg" id="m_os"></span></div>
+          <button class="b" onclick="testConn('opensky', 'm_os', ['opensky_client_id','opensky_client_secret'])">Test</button><span class="msg" id="m_os"></span></div>
       </div>
       <div class="card">
         <h3>MQTT (Home Assistant devices)</h3>
@@ -113,10 +113,11 @@
         <label>User <span id="s_mqtt_user"></span></label><input id="mqtt_user" autocomplete="off">
         <label>Password <span id="s_mqtt_password"></span></label><input id="mqtt_password" type="password" autocomplete="off">
         <div class="actions"><button class="b primary" onclick="saveSecrets(['mqtt_url','mqtt_user','mqtt_password'])">Save</button>
-          <button class="b" onclick="testConn('mqtt', 'm_mq')">Test</button><span class="msg" id="m_mq"></span></div>
+          <button class="b" onclick="testConn('mqtt', 'm_mq', ['mqtt_url','mqtt_user','mqtt_password'])">Test</button><span class="msg" id="m_mq"></span></div>
       </div>
     </div>
-    <p class="hint">Saved values are never shown again. Leave a field blank to keep what is saved.</p>
+    <p class="hint">Saved values are never shown again. Leave a field blank to keep what is saved.
+      Test tries what's in the fields (blank ones use the saved value) -- no need to save first.</p>
   </section>
 </main>
 
@@ -328,9 +329,10 @@ async function saveSecrets(keys) {
   if (!Object.keys(body).length) return;
   S = await api("POST", "api/secrets", body); for (const k of keys) $(k).value = ""; render(); loadEntities();
 }
-async function testConn(which, out) {
+async function testConn(which, out, keys) {         // tests what's typed; blank fields use the saved value
   $(out).className = "msg"; $(out).textContent = "testing…";
-  try { const r = await api("POST", "api/test/" + which); $(out).className = "msg " + (r.ok ? "ok" : "bad"); $(out).textContent = r.message; }
+  const body = Object.fromEntries(keys.map(k => [k, $(k).value.trim()]));
+  try { const r = await api("POST", "api/test/" + which, body); $(out).className = "msg " + (r.ok ? "ok" : "bad"); $(out).textContent = r.message; }
   catch (e) { $(out).className = "msg bad"; $(out).textContent = e.message; }
 }
 async function loadEntities() {

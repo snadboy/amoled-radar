@@ -137,13 +137,14 @@ def handle(h, method, p, q, body, apps):
                 settings.set_secret(k, (v or "").strip() if v is not None else "")
             return h.json(_state())
         if method == "POST" and parts[:1] == ["test"] and len(parts) == 2:
-            if parts[1] == "ha": ok, msg = ha.test()
+            v = lambda k: (data.get(k) or "").strip() or None     # typed on the page; blank = saved
+            if parts[1] == "ha": ok, msg = ha.test(v("hass_url"), v("hass_token"))
             elif parts[1] == "mqtt":
                 from . import mqtt
-                ok, msg = mqtt.test()
+                ok, msg = mqtt.test(v("mqtt_url"), v("mqtt_user"), v("mqtt_password"))
             elif parts[1] == "opensky":
                 from .aircraft import opensky
-                ok, msg = opensky.test()
+                ok, msg = opensky.test(v("opensky_client_id"), v("opensky_client_secret"))
             else: return False
             return h.json({"ok": ok, "message": msg})
         if method == "GET" and parts == ["firmware"]:

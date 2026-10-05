@@ -42,10 +42,13 @@ def entities(domain=None):
     except Exception:
         return []
 
-def test():
-    """(ok, message) -- for the admin page's Test button."""
-    if not configured(): return False, "URL or token not set"
+def test(url=None, token=None):
+    """(ok, message) -- the admin page's Test button, with the values typed on the page
+    (blank ones fall back to the saved settings)."""
+    url, token = url or settings.secret("hass_url"), token or settings.secret("hass_token")
+    if not (url and token): return False, "URL or token not set"
     try:
-        return True, _get("/api/").get("message", "ok")
+        r = urllib.request.Request(url.rstrip("/") + "/api/", headers={"Authorization": "Bearer " + token})
+        return True, json.loads(urllib.request.urlopen(r, timeout=10).read()).get("message", "ok")
     except Exception as e:
         return False, str(e)[:120]

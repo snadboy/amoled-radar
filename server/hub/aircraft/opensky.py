@@ -27,29 +27,34 @@ class RateLimited(Exception):
 _token = {"value": None, "expires": 0.0}
 _token_lock = threading.Lock()
 
+def _fetch_token(cid, sec):
+    """(token, expires_in) for a client id + secret."""
+    if not (cid and sec):
+        raise AuthError("OpenSky client id / secret not set (admin page)")
+    body = urllib.parse.urlencode({"grant_type": "client_credentials",
+                                   "client_id": cid, "client_secret": sec}).encode()
+    req = urllib.request.Request(TOKEN_URL, data=body, headers={
+        "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        r = json.loads(urllib.request.urlopen(req, timeout=20).read())
+    except urllib.error.HTTPError as e:
+        raise AuthError("token HTTP %d" % e.code)
+    return r["access_token"], int(r.get("expires_in", 1800))
+
 def _token_value():
     with _token_lock:
         if _token["value"] and _token["expires"] - time.time() > 60:
             return _token["value"]
-        cid, sec = settings.secret("opensky_client_id"), settings.secret("opensky_client_secret")
-        if not (cid and sec):
-            raise AuthError("OpenSky client id / secret not set (admin page)")
-        body = urllib.parse.urlencode({"grant_type": "client_credentials",
-                                       "client_id": cid, "client_secret": sec}).encode()
-        req = urllib.request.Request(TOKEN_URL, data=body, headers={
-            "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded"})
-        try:
-            r = json.loads(urllib.request.urlopen(req, timeout=20).read())
-        except urllib.error.HTTPError as e:
-            raise AuthError("token HTTP %d" % e.code)
-        _token.update(value=r["access_token"], expires=time.time() + int(r.get("expires_in", 1800)))
+        tok, exp = _fetch_token(settings.secret("opensky_client_id"), settings.secret("opensky_client_secret"))
+        _token.update(value=tok, expires=time.time() + exp)
         return _token["value"]
 
-def test():
-    """(ok, message) -- for the admin page's Test button: fetch a token."""
-    _drop_token()
+def test(cid=None, sec=None):
+    """(ok, message) -- the admin page's Test button: fetch a token with the values
+    typed on the page (blank ones fall back to the saved settings)."""
     try:
-        _token_value(); return True, "token ok"
+        _fetch_token(cid or settings.secret("opensky_client_id"), sec or settings.secret("opensky_client_secret"))
+        return True, "token ok"
     except Exception as e:
         return False, str(e)[:120]
 

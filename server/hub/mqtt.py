@@ -200,9 +200,11 @@ def start(apps):
     _apps.extend(apps)
     threading.Thread(target=_loop, daemon=True).start()
 
-def test():
-    """(ok, message): try the saved broker and login once."""
-    url, user, pw = _conf_now()
+def test(url=None, user=None, pw=None):
+    """(ok, message): try a broker and login once -- the values typed on the admin page,
+    blank ones falling back to the saved settings."""
+    saved = _conf_now()
+    url, user, pw = url or saved[0], user or saved[1], pw or saved[2]
     if not url: return False, "broker URL not set"
     host, port = _parse(url)
     done, res = threading.Event(), {}
