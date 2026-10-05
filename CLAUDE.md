@@ -30,10 +30,13 @@ One server for every small display: weather radar today, aircraft next (ported f
   Both boards run 32d42ef-10042116 (points at bedrock). `radar-dev` on sdevs is retired;
   `~/radar-dev-cache` kept as a backup.
   **To ship a server change:** push -> CI builds ghcr.io/snadboy/display-hub:<sha> -> bump the tag
-  in docker-homelab -> Deploy in Dockhand. 
-  **To ship firmware:** `BOARD=c6 ./build.sh`, then copy build-c6/display_hub.bin + version.txt into
-  bedrock's volume `firmware/hub/` (P4: build-p4 -> `firmware/hub-p4/`). Boards check every 6 h
-  and 90 s after boot.
+  in docker-homelab -> deploy stack 31 via the Dockhand REST API (owner's OK first):
+  `curl -X POST -H "Authorization: Bearer $DOCKHAND_API_TOKEN" -d '{}'
+  https://dockhand.swallow-spectrum.ts.net/api/git/stacks/31/deploy` (async job; poll
+  GET .../stacks/31 for syncStatus, then the container swaps ~30 s later). Token in shareables .env. 
+  **To ship firmware:** push firmware/hub -> CI release `firmware-<sha>` -> admin page Firmware tab
+  (or POST /api/firmware/publish {"board","tag"} on the VIP) publishes it to a board's channel.
+  Boards check every 6 h and 90 s after boot.
 - opensky-amoled archived 2026-10-04: private, read-only https://github.com/snadboy/opensky-amoled
   (local copy still at ~/projects/git/opensky-amoled). Old amoled-radar images removed from sdevs
   and bedrock.
@@ -59,8 +62,9 @@ One server for every small display: weather radar today, aircraft next (ported f
   per-board build dirs (`BOARD=p4 ./build.sh` -> build-p4/), OTA channel `hub-p4`. ESP-IDF's
   default chip revision is 3.x only (CONFIG_ESP32P4_REV_MIN_301): read the real one with
   esptool before flashing. esp_hosted SDIO defaults: CMD 19, CLK 18, D0-D3 14-17, C6 reset 54.
-  2026-10-05: bedrock runs display-hub:00190cd (docker-homelab e7dd5ca); both displays run
-  firmware 210ebd5-10051016 from bedrock (published on root + `hub` channels); test hub removed.
+  2026-10-05 (later): bedrock runs display-hub:725800f (docker-homelab 95aadaf, deployed via the
+  Dockhand API); settings seeded into hub.db; both displays run CI firmware 725800f-10051120
+  (published on channel `hub` from the Firmware tab). Test hubs removed.
   The displays need only power now (any USB charger) -- sdevs USB is for first flash, rescue
   and logs.
 - Builds: `[BOARD=c6|p4] ./build.sh` (hub = bedrock by default; `HUB_SERVER_URL=...` for another)
