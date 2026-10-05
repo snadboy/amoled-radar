@@ -21,6 +21,9 @@ from PIL import Image, ImageDraw, ImageFont
 LAT  = float(os.environ.get('RADAR_LAT', '41.90'))
 LON  = float(os.environ.get('RADAR_LON', '-88.32'))
 RADIUS_MI   = 50.0
+# The view shows a bit more than the radius, so the outer ring sits inside the glass
+# (at exactly the edge, the bezel and rounded corners cut it off).
+VIEW_MARGIN = 1.1
 PANEL       = 480
 # The panel's glass has ROUNDED CORNERS (~50-56 px radius, measured from a photo of
 # the real board 2026-10-03). Anything inside a corner arc is cut off: it clipped
@@ -60,7 +63,7 @@ def window(z, tile, lat=None, lon=None, view=None, g=None):
         half_w = view["lon_span"] / 2.0 / 360.0 * (2 ** z) * tile
         half_h = half_w * (g.view_h / float(g.w))
     else:
-        span_m = view.get("radius_mi", RADIUS_MI) * 2 * 1609.344
+        span_m = view.get("radius_mi", RADIUS_MI) * VIEW_MARGIN * 2 * 1609.344
         half_h = span_m / mpp(lat, z, tile) / 2.0
         half_w = half_h * (g.w / float(g.view_h))
     bleed  = (g.orbit + 2) / float(g.view_h) * (half_h * 2)   # keep the orbit in-bounds
@@ -235,8 +238,16 @@ def qc_mask(lat, lon, view, when, available, ow, oh, g=None):
     return cv2.dilate(a.astype(np.uint8), k) > 0
 
 def apply_mask(layer, mask):
+    """The layer with echo outside the QC mask removed -- or None when the mask would
+    remove much SOLID echo: clutter is faint, so that means NOAA's mosaic doesn't cover
+    the area (offshore, beyond the radars) and masking would cut a hole that flickers
+    against the unmasked frames."""
     import numpy as np
     a = np.asarray(layer.convert("RGBA")).copy()
+    solid = a[..., 3] >= 250
+    n = int(solid.sum())
+    if n > 500 and int((solid & ~mask).sum()) > 0.25 * n:
+        return None
     a[..., 3][~mask] = 0
     return Image.fromarray(a, "RGBA")
 
@@ -256,7 +267,7 @@ def decorate(img, view=None, g=None):
     # ~4% too big (about 52 mi).
     radius = view.get("radius_mi", RADIUS_MI)
     bleed_frac = 2.0 * (g.orbit + 2) / float(g.view_h)
-    px_per_mi = (img.height / 2.0) / (radius * (1 + bleed_frac))
+    px_per_mi = (img.height / 2.0) / (radius * VIEW_MARGIN * (1 + bleed_frac))
     for mi in (25, 50):
         r = mi*px_per_mi
         d.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(125, 145, 165, RING_ALPHA), width=2)
@@ -416,6 +427,10 @@ def progress_bar(frame, frac, left, right, ox=0, oy=0, g=None):
     y = base + jy
     f = fnt(13)
     m = 12
+    if g is not None and g.r and not g.strip and not g.round:
+        # no strip: the bar is the panel's bottom edge, inside the rounded corners --
+        # lift it a little and pull the times in clear of them
+        y -= 6; m = max(12, int(g.r * 0.6))
     if g is not None and g.round:                  # labels inside the circle at this row
         f = fnt(11)
         left, right = (t.replace(" AM", "").replace(" PM", "") for t in (left, right))

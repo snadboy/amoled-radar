@@ -62,9 +62,13 @@ def ui_boxes(w, h):
     return [(20, 8, 120, 48), (w - 140, 8, w - 20, 48), (20, h - 48, 250, h - 8),
             (w - 150, h - 40, w - 20, h - 8), (cx - 7, cy - 7, cx + 7, cy + 7)]
 
+# The map shows a bit more than the range, so the outer ring sits inside the glass
+# (at exactly the edge, the bezel and rounded corners cut it off).
+VIEW_MARGIN = 1.1
+
 def mpp_for(view, range_mi, w, h):
     """Mercator metres per screen pixel (ground m/px divided by cos(lat))."""
-    return range_mi * M_PER_MI / (min(w, h) / 2.0) / math.cos(math.radians(view["lat"]))
+    return range_mi * VIEW_MARGIN * M_PER_MI / (min(w, h) / 2.0) / math.cos(math.radians(view["lat"]))
 
 def _cache_dir(cache, *sub):
     p = os.path.join(cache, "aircraft", *sub); os.makedirs(p, exist_ok=True); return p
@@ -173,7 +177,7 @@ def render_level(cache, view, towns, range_mi, w, h, r):
     # Range rings (50% teal over the map) and the home mark.
     ov = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(ov)
-    ppm = min(w, h) / 2.0 / range_mi
+    ppm = min(w, h) / 2.0 / (range_mi * VIEW_MARGIN)
     c = (w // 2, h // 2)
     f = font(11)
     if view.get("home"):                 # panned: no rings round an arbitrary point; mark home instead

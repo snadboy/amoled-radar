@@ -194,9 +194,11 @@ def build_radar(city, maps, g):
             layer = R.suppress_clear_air(layer)      # before resampling blends colours
         layer = layer.resize((OW, OH), R.Image.LANCZOS)
         try:
-            mask = R.qc_mask(lat, lon, city, f["time"], qc_avail, OW, OH, g)
-            if mask is not None:
-                layer = R.apply_mask(layer, mask); qc_used += 1
+            # not on the Active view: it roams to storms beyond NOAA's radar coverage
+            mask = None if city.get("auto") else R.qc_mask(lat, lon, city, f["time"], qc_avail, OW, OH, g)
+            masked = R.apply_mask(layer, mask) if mask is not None else None
+            if masked is not None:
+                layer = masked; qc_used += 1
         except Exception as e:
             print("[radar] %s NOAA QC frame failed (%s) -- left unmasked" % (city["id"], str(e)[:60]), flush=True)
         layers.append(layer); stamps.append(f["time"])
