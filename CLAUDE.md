@@ -62,9 +62,8 @@ One server for every small display: weather radar today, aircraft next (ported f
   per-board build dirs (`BOARD=p4 ./build.sh` -> build-p4/), OTA channel `hub-p4`. ESP-IDF's
   default chip revision is 3.x only (CONFIG_ESP32P4_REV_MIN_301): read the real one with
   esptool before flashing. esp_hosted SDIO defaults: CMD 19, CLK 18, D0-D3 14-17, C6 reset 54.
-  2026-10-05 (later): bedrock runs display-hub:725800f (docker-homelab 95aadaf, deployed via the
-  Dockhand API); settings seeded into hub.db; both displays run CI firmware 725800f-10051120
-  (published on channel `hub` from the Firmware tab). Test hubs removed.
+  2026-10-05 (later): bedrock runs display-hub:760e931 (deployed via the Dockhand API); settings
+  in hub.db; both displays run CI firmware 760e931-10051234 (channel `hub`). Test hubs removed.
   The displays need only power now (any USB charger) -- sdevs USB is for first flash, rescue
   and logs.
 - Builds: `[BOARD=c6|p4] ./build.sh` (hub = bedrock by default; `HUB_SERVER_URL=...` for another)
@@ -87,8 +86,16 @@ One server for every small display: weather radar today, aircraft next (ported f
     board's channel (`hub` = c6, `hub-p4` = p4); `/install` = ESP Web Tools page (needs https:
     use the VIP).
   * Verified on Display 2 (test hub :8099/:8199): seeding, live rename, restart on start-app
-    change, NVS-erased board -> set-up screen -> Improv -> boot. HA exposure (MQTT discovery) =
-    step 3, not started.
+    change, NVS-erased board -> set-up screen -> Improv -> boot.
+- **HA over MQTT (step 3, 2026-10-05):** `server/hub/mqtt.py` (paho-mqtt) publishes discovery once
+  Connections -> MQTT is set (broker = HA Mosquitto add-on, mqtt://host-ha.isnadboy.com:1883, its
+  own HA user `display-hub`). Per display: Online, App + City selects (switch now), Screen select
+  (Auto/On/Off -> settings screen.mode), Brightness, Firmware, IP, Restart, Identify. Hub: aircraft
+  in range + closest per view, OpenSky credits, Weather loops problem. Devices poll every 5 s
+  (`poll_s` in the state reply; HA reads cached 5 s), report app/view/on/bright, and get one-shot
+  commands in the reply. Tested end to end with a local Mosquitto + Display 2. Deployed:
+  hub 760e931 (docker-homelab bf1c430, via the Dockhand API); both displays on firmware
+  760e931-10051234.
 - **USB on sdevs** (pve-faraday VM 121): both pinned by physical port 2026-10-04 --
   `usb0: host=3-1.4.1` (weather board), `usb1: host=3-1.3` (aircraft board).
   | Hub name | Started as | USB serial = MAC | Host port | sdevs | IP |
