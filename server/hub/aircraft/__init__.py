@@ -35,8 +35,9 @@ ID = "aircraft"
 # The centre comes from the environment: the repo is public, and the default is the
 # public Geneva city centre the weather app already uses. Set AIR_LAT/AIR_LON to home.
 DEFAULT_VIEWS = [{"id": "home", "name": "Home",
-                  "lat": float(os.environ.get("AIR_LAT", "41.8875")),
-                  "lon": float(os.environ.get("AIR_LON", "-88.3054")),
+                  # "or": compose turns an unset ${AIR_LAT} into "", which must mean "default"
+                  "lat": float(os.environ.get("AIR_LAT") or "41.8875"),
+                  "lon": float(os.environ.get("AIR_LON") or "-88.3054"),
                   "radius_mi": 50, "levels": [50, 25, 10]}]
 VIEWS = json.loads(os.environ["AIR_VIEWS"]) if os.environ.get("AIR_VIEWS") else DEFAULT_VIEWS
 BY_ID = {v["id"]: v for v in VIEWS}
