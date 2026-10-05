@@ -50,6 +50,10 @@
   dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 18px; width: min(560px, 94vw); }
   dialog::backdrop { background: rgba(0,0,0,.6); }
   dialog h2 { margin: 0 0 6px; font-size: 18px; }
+  .finds { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+  .finds button { text-align: left; background: #1c2229; border: 1px solid var(--line); border-radius: 8px; color: var(--ink);
+                  padding: 6px 10px; font: inherit; cursor: pointer; }
+  .finds button:hover { border-color: var(--accent); } .finds .r { color: var(--dim); font-size: 12.5px; }
   details summary { cursor: pointer; color: var(--dim); font-size: 13px; margin: 10px 0 4px; }
   .set { color: var(--ok); font-size: 12.5px; } .unset { color: var(--bad); font-size: 12.5px; }
   .hint { color: var(--dim); font-size: 12.5px; margin: 4px 0 0; }
@@ -147,7 +151,9 @@
 
 <dialog id="pdlg"><form method="dialog" onsubmit="return false">
   <h2 id="ptitle">Place</h2>
-  <div class="row"><div><label>Name</label><input id="p_name"></div><div><label>Id <span class="hint">(lowercase, can't change later)</span></label><input id="p_id"></div></div>
+  <label>Look up <span class="hint">a city, e.g. "Geneva, IL" -- fills in the name, position and time zone</span></label>
+  <input id="p_find" placeholder="City, state or country" autocomplete="off"><div class="finds" id="p_finds"></div>
+  <label>Name</label><input id="p_name">
   <div class="row3"><div><label>Latitude</label><input id="p_lat"></div><div><label>Longitude</label><input id="p_lon"></div>
     <div><label>Time zone</label><input id="p_tz" placeholder="America/Chicago"></div></div>
   <label>Temperature and humidity</label>
@@ -156,6 +162,7 @@
   <div class="row" id="p_ha"><div><label>Temperature entity</label><input id="p_temp" list="dl_sensor"></div><div><label>Humidity entity</label><input id="p_hum" list="dl_sensor"></div></div>
   <label>Towns to label <span class="hint">one per line: Name, lat, lon  (add ", *" for an amber marker)</span></label>
   <textarea id="p_towns"></textarea>
+  <div class="actions" style="margin-top:6px"><button type="button" class="b" id="p_suggest">Suggest towns</button><span class="msg" id="p_smsg"></span></div>
   <details><summary>Advanced</summary>
     <label class="inline"><input type="checkbox" id="p_wide"> Regional view (no range rings)</label>
     <label class="inline"><input type="checkbox" id="p_sca"> Always hide clear-air echo</label>
@@ -168,7 +175,9 @@
 
 <dialog id="vdlg"><form method="dialog" onsubmit="return false">
   <h2 id="vtitle">Aircraft view</h2>
-  <div class="row"><div><label>Name</label><input id="v_name"></div><div><label>Id <span class="hint">(can't change later)</span></label><input id="v_id"></div></div>
+  <label>Look up <span class="hint">a place to centre on (or type exact coordinates below)</span></label>
+  <input id="v_find" placeholder="City, state or country" autocomplete="off"><div class="finds" id="v_finds"></div>
+  <label>Name</label><input id="v_name">
   <div class="row"><div><label>Latitude</label><input id="v_lat"></div><div><label>Longitude</label><input id="v_lon"></div></div>
   <label>Zoom levels <span class="hint">miles from centre to edge, widest first, e.g. 50, 25, 10</span></label><input id="v_levels">
   <div class="actions"><button class="b primary" onclick="saveView()">Save</button><button class="b" onclick="vdlg.close()">Cancel</button>
@@ -352,24 +361,26 @@ function editPlace(id) {
   const p = S.places.find(x => x.id == id) || {temp: {source: "nws"}, places: [], tz: "America/Chicago"};
   editingPlace = id || null;
   $("ptitle").textContent = id ? "Edit " + p.name : "Add a place";
-  $("p_id").value = p.id || ""; $("p_id").disabled = !!id; $("p_del").style.display = id ? "" : "none";
+  $("p_find").value = ""; $("p_finds").innerHTML = ""; $("p_del").style.display = id ? "" : "none";
   for (const [f, k] of [["p_name", "name"], ["p_lat", "lat"], ["p_lon", "lon"], ["p_tz", "tz"], ["p_radius", "radius_mi"], ["p_span", "lon_span"],
                         ["p_label", "status_label"], ["p_bz", "base_zoom"], ["p_rz", "radar_zoom"], ["p_rt", "radar_tile"]]) $(f).value = p[k] ?? "";
   document.querySelector(`input[name=p_src][value=${p.temp.source}]`).checked = true;
   $("p_temp").value = p.temp.temp || ""; $("p_hum").value = p.temp.hum || "";
   $("p_wide").checked = !!p.wide; $("p_sca").checked = !!p.suppress_clear_air;
   $("p_towns").value = (p.places || []).map(t => `${t[0]}, ${t[1]}, ${t[2]}${t[3] ? ", *" : ""}`).join("\n");
-  $("p_msg").textContent = ""; pdlg.showModal();
+  $("p_msg").textContent = ""; $("p_smsg").textContent = ""; pdlg.showModal();
 }
 async function savePlace() {
-  const id = editingPlace || $("p_id").value.trim(), src = document.querySelector("input[name=p_src]:checked").value;
+  const src = document.querySelector("input[name=p_src]:checked").value;
   const towns = $("p_towns").value.split("\n").map(l => l.trim()).filter(Boolean).map(l => {
     const [n, la, lo, mine] = l.split(",").map(s => s.trim()); return mine == "*" ? [n, +la, +lo, 1] : [n, +la, +lo]; });
   const body = {name: $("p_name").value, lat: $("p_lat").value, lon: $("p_lon").value, tz: $("p_tz").value,
     temp: src == "ha" ? {source: "ha", temp: $("p_temp").value, hum: $("p_hum").value} : {source: "nws"}, places: towns,
     wide: $("p_wide").checked, suppress_clear_air: $("p_sca").checked, radius_mi: $("p_radius").value, lon_span: $("p_span").value,
     status_label: $("p_label").value, base_zoom: $("p_bz").value, radar_zoom: $("p_rz").value, radar_tile: $("p_rt").value};
-  try { S = await api("PUT", "api/places/" + encodeURIComponent(id), body); pdlg.close(); render(); }
+  try { S = editingPlace ? await api("PUT", "api/places/" + encodeURIComponent(editingPlace), body)
+                         : await api("POST", "api/places", body);            // the hub makes the id from the name
+        pdlg.close(); render(); }
   catch (e) { $("p_msg").className = "msg bad"; $("p_msg").textContent = e.message; }
 }
 async function delPlace() {
@@ -383,14 +394,15 @@ function editView(id) {
   const v = S.views.find(x => x.id == id) || {levels: [50, 25, 10]};
   editingView = id || null;
   $("vtitle").textContent = id ? "Edit " + v.name : "Add a view";
-  $("v_id").value = v.id || ""; $("v_id").disabled = !!id; $("v_del").style.display = id ? "" : "none";
+  $("v_find").value = ""; $("v_finds").innerHTML = ""; $("v_del").style.display = id ? "" : "none";
   $("v_name").value = v.name || ""; $("v_lat").value = v.lat ?? ""; $("v_lon").value = v.lon ?? ""; $("v_levels").value = v.levels.join(", ");
   $("v_msg").textContent = ""; vdlg.showModal();
 }
 async function saveView() {
-  const id = editingView || $("v_id").value.trim();
   const body = {name: $("v_name").value, lat: $("v_lat").value, lon: $("v_lon").value, levels: $("v_levels").value.split(",").map(s => s.trim()).filter(Boolean)};
-  try { S = await api("PUT", "api/views/" + encodeURIComponent(id), body); vdlg.close(); render(); }
+  try { S = editingView ? await api("PUT", "api/views/" + encodeURIComponent(editingView), body)
+                        : await api("POST", "api/views", body);
+        vdlg.close(); render(); }
   catch (e) { $("v_msg").className = "msg bad"; $("v_msg").textContent = e.message; }
 }
 async function delView() {
@@ -423,6 +435,37 @@ async function loadFirmware(refresh) {
   }
 }
 document.querySelector("#tabs button[data-t=fw]").addEventListener("click", () => loadFirmware());
+
+// ---- look up a place by name (both dialogs): pick a match to fill name, position (and time zone)
+function wireLookup(inputId, listId, fill) {
+  let timer = null;
+  $(inputId).oninput = () => {
+    clearTimeout(timer);
+    const q = $(inputId).value.trim();
+    if (q.length < 2) { $(listId).innerHTML = ""; return; }
+    timer = setTimeout(async () => {
+      try {
+        const r = await api("GET", "api/geocode?q=" + encodeURIComponent(q));
+        $(listId).innerHTML = r.length ? r.map((x, i) => `<button type="button" data-i="${i}">${esc(x.name)}
+            <span class="r">${esc(x.region)} · ${x.lat}, ${x.lon}</span></button>`).join("") : '<span class="hint">No match.</span>';
+        $(listId).querySelectorAll("button").forEach(b => b.onclick = () => { fill(r[+b.dataset.i]); $(listId).innerHTML = ""; $(inputId).value = ""; });
+      } catch (e) { $(listId).innerHTML = `<span class="msg bad">${esc(e.message)}</span>`; }
+    }, 350);
+  };
+}
+$("p_suggest").onclick = async () => {
+  const lat = $("p_lat").value.trim(), lon = $("p_lon").value.trim();
+  if (!lat || !lon) { $("p_smsg").className = "msg bad"; $("p_smsg").textContent = "look up or enter the position first"; return; }
+  if ($("p_towns").value.trim() && !confirm("Replace the towns already listed?")) return;
+  $("p_smsg").className = "msg"; $("p_smsg").textContent = "asking OpenStreetMap…";
+  try {
+    const t = await api("GET", `api/towns?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&radius_mi=${encodeURIComponent($("p_radius").value || 50)}`);
+    $("p_towns").value = t.map(x => x.join(", ")).join("\n");
+    $("p_smsg").textContent = t.length ? t.length + " towns -- edit freely" : "no towns found nearby";
+  } catch (e) { $("p_smsg").className = "msg bad"; $("p_smsg").textContent = e.message; }
+};
+wireLookup("p_find", "p_finds", x => { $("p_name").value = x.name; $("p_lat").value = x.lat; $("p_lon").value = x.lon; if (x.tz) $("p_tz").value = x.tz; });
+wireLookup("v_find", "v_finds", x => { $("v_name").value = x.name; $("v_lat").value = x.lat; $("v_lon").value = x.lon; });
 
 // ---- connections
 async function saveSecrets(keys) {

@@ -10,8 +10,11 @@ access control; there is no separate login.
   POST   /api/secrets               {"hass_url": "...", ...}; null clears one; omitted = unchanged
   POST   /api/test/ha | opensky     try the connection
   GET    /api/ha/entities?domain=   entity ids for the pickers
-  PUT    /api/places/<id>           create or replace a place      DELETE removes it
-  PUT    /api/views/<id>            create or replace an aircraft view   DELETE removes it
+  POST   /api/places                create a place (its id is made from the name)
+  PUT    /api/places/<id>           change a place                 DELETE removes it
+  POST   /api/views, PUT|DELETE /api/views/<id>    the same for aircraft views
+  GET    /api/geocode?q=Geneva, IL  places matching a name (Open-Meteo): name, lat, lon, time zone
+  GET    /api/towns?lat=&lon=&radius_mi=   towns worth labelling around a place (OpenStreetMap)
   PUT    /api/devices/<id>          change a device's settings     DELETE forgets it
   GET    /api/devices/<id>/preview.png   what the device shows when it starts
   GET    /api/firmware              CI releases, what each board's channel runs, device versions
@@ -19,7 +22,7 @@ access control; there is no separate login.
   GET    /install                   install page (ESP Web Tools: flash + WiFi over USB)
   GET    /install/manifest.json, /install/<board>-full.bin
 """
-import json, os, re, time
+import json, os, re, time, urllib.parse, urllib.request
 from zoneinfo import ZoneInfo
 
 from . import core, firmware, ha, settings
@@ -29,6 +32,59 @@ INSTALL = os.path.join(os.path.dirname(__file__), "install.html")
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,12}$")      # store keys are "w:<id>", 16 bytes max
 
 class Bad(Exception): pass
+
+US_STATES = {"AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California", "CO": "Colorado",
+    "CT": "Connecticut", "DE": "Delaware", "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois",
+    "IN": "Indiana", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri", "MT": "Montana",
+    "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania",
+    "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+    "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+    "DC": "District of Columbia"}
+
+def geocode(q):
+    """Places matching "Name" or "Name, region" (a US state code or name, a country...)."""
+    name, _, where = (x.strip() for x in q.partition(","))
+    if len(name) < 2: return []
+    url = "https://geocoding-api.open-meteo.com/v1/search?" + urllib.parse.urlencode(
+        {"name": name, "count": 20 if where else 10, "language": "en", "format": "json"})
+    req = urllib.request.Request(url, headers={"User-Agent": "snadboy-display-hub/1.0"})
+    res = json.loads(urllib.request.urlopen(req, timeout=10).read()).get("results") or []
+    w = US_STATES.get(where.upper(), where).lower()
+    out = []
+    for r in res:
+        region = ", ".join(x for x in (r.get("admin1"), r.get("country")) if x)
+        if w and w not in region.lower() and w != (r.get("country_code") or "").lower(): continue
+        out.append({"name": r["name"], "region": region, "lat": round(r["latitude"], 4), "lon": round(r["longitude"], 4),
+                    "tz": r.get("timezone", ""), "population": r.get("population")})
+    return out[:10]
+
+def suggest_towns(lat, lon, radius_mi=50, n=4):
+    """The biggest towns around a place, spread round the compass (labels bunched on one
+    side collide on the radar), between a quarter and nine-tenths of the radius out."""
+    import math
+    from .aircraft import basemap
+    towns = basemap.places(settings.CACHE, {"lat": lat, "lon": lon, "levels": [radius_mi]})
+    picks = []
+    for pop, name, tlat, tlon in towns:                  # biggest first
+        dx = math.radians(tlon - lon) * math.cos(math.radians((tlat + lat) / 2))
+        dy = math.radians(tlat - lat)
+        dist, brg = math.hypot(dx, dy) * 3958.8, math.degrees(math.atan2(dx, dy)) % 360
+        if not (radius_mi * 0.25 <= dist <= radius_mi * 0.9): continue
+        if any(min(abs(brg - b), 360 - abs(brg - b)) < 60 for b in (p[3] for p in picks)): continue
+        picks.append((name, round(tlat, 4), round(tlon, 4), brg))
+        if len(picks) == n: break
+    return [list(p[:3]) for p in picks]
+
+def _new_id(name, taken):
+    """A short, unique, stable id from a name ("St. Louis" -> "st-louis"). Ids are internal --
+    the firmware's flash store keys are "w:<id>", so they stay within 13 characters."""
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:13].strip("-") or "place"
+    cand, n = base, 2
+    while cand in taken:
+        sfx = "-%d" % n; cand = base[:13 - len(sfx)].rstrip("-") + sfx; n += 1
+    return cand
 
 def _num(v, lo, hi, what):
     try: v = float(v)
@@ -161,6 +217,21 @@ def handle(h, method, p, q, body, apps):
             try: ver = firmware.publish(data["board"], str(data.get("tag", "")))
             except ValueError as e: raise Bad(str(e))
             return h.json({"ok": True, "version": ver})
+        if method == "GET" and parts == ["geocode"]:
+            try: return h.json(geocode(q.get("q", "")))
+            except Exception as e: return h.json({"error": "lookup failed: %s" % str(e)[:80]}, 502)
+        if method == "GET" and parts == ["towns"]:
+            try:
+                return h.json(suggest_towns(_num(q.get("lat"), -85, 85, "latitude"), _num(q.get("lon"), -180, 180, "longitude"),
+                                            _num(q.get("radius_mi", 50), 5, 500, "radius")))
+            except Bad: raise
+            except Exception as e: return h.json({"error": "town lookup failed: %s" % str(e)[:80]}, 502)
+        if method == "POST" and len(parts) == 1 and parts[0] in ("places", "views"):
+            existing = settings.places() if parts[0] == "places" else settings.air_views()
+            new_id = _new_id(str(data.get("name", "")), {x["id"] for x in existing})
+            if parts[0] == "places": settings.put_place(_clean_place(new_id, data))
+            else: settings.put_view(_clean_view(new_id, data))
+            return h.json(_state())
         if method == "GET" and parts == ["ha", "entities"]:
             return h.json(ha.entities(q.get("domain") or None))
         if len(parts) == 2 and parts[0] in ("places", "views"):
