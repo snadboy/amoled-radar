@@ -239,14 +239,17 @@ def qc_mask(lat, lon, view, when, available, ow, oh, g=None):
 
 def apply_mask(layer, mask):
     """The layer with echo outside the QC mask removed -- or None when the mask would
-    remove much SOLID echo: clutter is faint, so that means NOAA's mosaic doesn't cover
+    remove much real rain: clutter is faint, so that means NOAA's mosaic doesn't cover
     the area (offshore, beyond the radars) and masking would cut a hole that flickers
     against the unmasked frames."""
     import numpy as np
     a = np.asarray(layer.convert("RGBA")).copy()
-    solid = a[..., 3] >= 250
-    n = int(solid.sum())
-    if n > 500 and int((solid & ~mask).sum()) > 0.25 * n:
+    r, b = a[..., 0].astype(int), a[..., 2].astype(int)
+    # real rain: opaque, but not the light cyan of clear-air rings round the radars
+    # (those are exactly what the mask is for -- counting them disabled it)
+    rain = (a[..., 3] >= 250) & ~((b > r) & (b > 200))
+    n = int(rain.sum())
+    if n > 500 and int((rain & ~mask).sum()) > 0.25 * n:
         return None
     a[..., 3][~mask] = 0
     return Image.fromarray(a, "RGBA")
