@@ -66,6 +66,25 @@ One server for every small display: weather radar today, aircraft next (ported f
 - Builds: `[BOARD=c6|p4] ./build.sh` (hub = bedrock by default; `HUB_SERVER_URL=...` for another)
   -> `build-<board>/display_hub.bin`. Flash by SERIAL, never by ttyACM number:
   `BOARD=c6 PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
+- **Settings + install (2026-10-05), retiring .env:** decisions: boot default (no remembered
+  app/city), admin page Tailscale-only (no login), WiFi set on the board.
+  * `server/hub/settings.py`: SQLite `hub.db` in the cache volume -- secrets (write-only),
+    places, air_views, devices (name, apps, start_app, weather places/start, aircraft
+    view/start_level, room screen policy). Seeded once from env + devices.json. Only places /
+    views some device uses are rendered / polled.
+  * `admin.py` + `admin.html` on ADMIN_PORT 8081 (DockTail VIP only; LAN 8080 stays read-only):
+    Devices (cards + start preview), Weather places, Aircraft views, Firmware, Connections.
+  * Devices: `/device/hello` = own apps/places/view/start; `/device/<id>/state` = room screen
+    policy + name (live) + `sv` boot-settings version (changed -> device restarts).
+  * Firmware: no secrets; WiFi in NVS, set via Improv over USB (`core/improv.c`; C6 USB-JTAG,
+    P4 UART0). `DEV_WIFI=1 ./build.sh` seeds WiFi for dev builds only.
+  * CI `.github/workflows/firmware.yml` -> GitHub release `firmware-<sha>` (per board: app +
+    `-full` merged image, version.txt). Hub `firmware.py`: Firmware tab publishes a release to a
+    board's channel (`hub` = c6, `hub-p4` = p4); `/install` = ESP Web Tools page (needs https:
+    use the VIP).
+  * Verified on Display 2 (test hub :8099/:8199): seeding, live rename, restart on start-app
+    change, NVS-erased board -> set-up screen -> Improv -> boot. HA exposure (MQTT discovery) =
+    step 3, not started.
 - **USB on sdevs** (pve-faraday VM 121): both pinned by physical port 2026-10-04 --
   `usb0: host=3-1.4.1` (weather board), `usb1: host=3-1.3` (aircraft board).
   | Hub name | Started as | USB serial = MAC | Host port | sdevs | IP |
