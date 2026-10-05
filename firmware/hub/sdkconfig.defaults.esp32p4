@@ -7,3 +7,5 @@ CONFIG_SPIRAM=y
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
 # Chip revision: Waveshare ships builds for rev < 3 and rev 3.x. Set after reading the
 # board's revision with esptool (see CLAUDE.md); ESP-IDF's default is used until then.
+# Console (and Improv WiFi setup) on UART0: the board's "USB to UART" port goes through a bridge chip
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y

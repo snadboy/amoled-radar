@@ -1,32 +1,37 @@
 #!/usr/bin/env bash
-# Build the firmware in Espressif's container. WiFi credentials come from the
-# shareables .env and go ONLY into the gitignored secrets.defaults -- never into
-# the repo. One board per target; BOARD picks it (default c6):
+# Build the firmware in Espressif's container. Release builds carry NO secrets: boards
+# get WiFi from the install page (Improv over USB) and keep it on the board. One board
+# per target; BOARD picks it (default c6):
 #   ./build.sh                                   C6 AMOLED 2.16", hub = bedrock (the default)
 #   BOARD=p4 ./build.sh                          P4 LCD 3.5"
 #   HUB_SERVER_URL=http://192.168.86.220:8099 ./build.sh   any board, another hub
-# Output: build-<board>/display_hub.bin (+ version.txt, shared).
+#   DEV_WIFI=1 ./build.sh                        developer build: also seeds WiFi from the
+#                                                shareables .env (RADAR_WIFI_SSID/PASSWORD)
+#                                                for a board with none saved -- never publish it
+# Output: build-<board>/display_hub.bin (+ version.txt, shared). Overrides go ONLY into the
+# gitignored secrets.defaults.
 set -euo pipefail
 cd "$(dirname "$0")"
 ENV_FILE=${RADAR_ENV:-/mnt/shareables/.claude/.env}
 IDF_IMAGE=${IDF_IMAGE:-espressif/idf:v5.5.3}
 
 python3 - "$ENV_FILE" <<'PY'
-import os, shlex, subprocess, sys
-env = {}
-out = subprocess.run(["bash", "-c", 'set -a; source "$1" >/dev/null 2>&1; env -0', "_", sys.argv[1]],
-                     capture_output=True, check=True).stdout
-for item in out.split(b"\0"):
-    if b"=" in item:
-        k, v = item.split(b"=", 1); env[k.decode()] = v.decode()
-need = ["RADAR_WIFI_SSID", "RADAR_WIFI_PASSWORD"]
-missing = [k for k in need if not env.get(k)]
-if missing:
-    sys.exit("missing in %s: %s" % (sys.argv[1], ", ".join(missing)))
+import os, subprocess, sys
 def kc(v):                      # sdkconfig string escaping
     return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
-lines = ["CONFIG_HUB_WIFI_SSID=" + kc(env["RADAR_WIFI_SSID"]),
-         "CONFIG_HUB_WIFI_PASSWORD=" + kc(env["RADAR_WIFI_PASSWORD"])]
+lines = []
+if os.environ.get("DEV_WIFI") == "1":
+    env = {}
+    out = subprocess.run(["bash", "-c", 'set -a; source "$1" >/dev/null 2>&1; env -0', "_", sys.argv[1]],
+                         capture_output=True, check=True).stdout
+    for item in out.split(b"\0"):
+        if b"=" in item:
+            k, v = item.split(b"=", 1); env[k.decode()] = v.decode()
+    missing = [k for k in ("RADAR_WIFI_SSID", "RADAR_WIFI_PASSWORD") if not env.get(k)]
+    if missing:
+        sys.exit("missing in %s: %s" % (sys.argv[1], ", ".join(missing)))
+    lines += ["CONFIG_HUB_WIFI_SSID=" + kc(env["RADAR_WIFI_SSID"]),
+              "CONFIG_HUB_WIFI_PASSWORD=" + kc(env["RADAR_WIFI_PASSWORD"])]
 if os.environ.get("HUB_SERVER_URL"):
     lines.append("CONFIG_HUB_SERVER_URL=" + kc(os.environ["HUB_SERVER_URL"]))
 old = os.umask(0o077)

@@ -2,15 +2,15 @@
 # P4 hardware) follow IDF_TARGET.
 if(IDF_TARGET STREQUAL "esp32p4")
     set(board_srcs "boards/ws_p4_35.c" "apps/jpeg_draw_p4.c")
-    set(board_reqs esp_driver_ledc esp_driver_jpeg)
+    set(board_reqs esp_driver_ledc esp_driver_jpeg esp_driver_uart)
 else()
     set(board_srcs "boards/ws_c6_216.c" "apps/jpeg_draw.c")
-    set(board_reqs "")
+    set(board_reqs esp_driver_usb_serial_jtag)
 endif()
 
 idf_component_register(
     SRCS "main.c"
-         "core/net.c" "core/store.c" "core/ota.c" "core/keys.c" "core/ui.c"
+         "core/net.c" "core/store.c" "core/ota.c" "core/keys.c" "core/ui.c" "core/improv.c"
          "apps/aircraft.c" "apps/weather.c" "apps/rdl.c"
          ${board_srcs}
     INCLUDE_DIRS "." "core"

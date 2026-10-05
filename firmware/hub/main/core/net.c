@@ -15,16 +15,16 @@
 
 static const char *TAG = "net";
 static EventGroupHandle_t s_ev;
+static volatile bool s_have_creds;
 #define GOT_IP BIT0
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (s_have_creds) esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(s_ev, GOT_IP);
-        ESP_LOGW(TAG, "wifi disconnected, retrying");
-        esp_wifi_connect();
+        if (s_have_creds) { ESP_LOGW(TAG, "wifi disconnected, retrying"); esp_wifi_connect(); }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got ip " IPSTR, IP2STR(&e->ip_info.ip));
@@ -32,7 +32,10 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     }
 }
 
-esp_err_t net_wifi_connect(int timeout_ms)
+// WiFi credentials live on the board (ESP-IDF keeps the station config in NVS), set
+// once by the install page over USB (improv.c) -- not in the firmware, which carries
+// no secrets. A build with CONFIG_HUB_WIFI_SSID set (developer builds) still seeds them.
+bool net_init(void)
 {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -48,16 +51,45 @@ esp_err_t net_wifi_connect(int timeout_ms)
     ESP_ERROR_CHECK(esp_wifi_init(&ic));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL));
-    wifi_config_t wc = {0};
-    strlcpy((char *)wc.sta.ssid, CONFIG_HUB_WIFI_SSID, sizeof(wc.sta.ssid));
-    strlcpy((char *)wc.sta.password, CONFIG_HUB_WIFI_PASSWORD, sizeof(wc.sta.password));
-    wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    wifi_config_t wc = {0};
+    esp_wifi_get_config(WIFI_IF_STA, &wc);
+    if (!wc.sta.ssid[0] && CONFIG_HUB_WIFI_SSID[0]) {            // developer build: seed the board
+        strlcpy((char *)wc.sta.ssid, CONFIG_HUB_WIFI_SSID, sizeof(wc.sta.ssid));
+        strlcpy((char *)wc.sta.password, CONFIG_HUB_WIFI_PASSWORD, sizeof(wc.sta.password));
+        wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        esp_wifi_set_config(WIFI_IF_STA, &wc);
+    }
+    s_have_creds = wc.sta.ssid[0] != 0;
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "joining \"%s\"", CONFIG_HUB_WIFI_SSID);
+    if (s_have_creds) ESP_LOGI(TAG, "joining \"%s\"", (char *)wc.sta.ssid);
+    else ESP_LOGW(TAG, "no WiFi set up yet -- waiting for the install page (Improv over USB)");
+    return s_have_creds;
+}
+
+bool net_connected(void) { return xEventGroupGetBits(s_ev) & GOT_IP; }
+
+esp_err_t net_wait(int timeout_ms)
+{
     EventBits_t b = xEventGroupWaitBits(s_ev, GOT_IP, pdFALSE, pdTRUE, pdMS_TO_TICKS(timeout_ms));
     return (b & GOT_IP) ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+esp_err_t net_wifi_set(const char *ssid, const char *pass, int timeout_ms)
+{
+    wifi_config_t wc = {0};
+    strlcpy((char *)wc.sta.ssid, ssid, sizeof(wc.sta.ssid));
+    strlcpy((char *)wc.sta.password, pass, sizeof(wc.sta.password));
+    wc.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    ESP_LOGI(TAG, "new WiFi \"%s\" from the install page", ssid);
+    s_have_creds = false;                    // no retry storm while switching networks
+    esp_wifi_disconnect();
+    xEventGroupClearBits(s_ev, GOT_IP);
+    esp_err_t e = esp_wifi_set_config(WIFI_IF_STA, &wc);      // saved to NVS
+    if (e != ESP_OK) return e;
+    s_have_creds = true;
+    esp_wifi_connect();
+    return net_wait(timeout_ms);
 }
 
 esp_err_t net_fetch(const char *url, uint8_t **out, size_t *out_len, size_t max_len, int *status_out)

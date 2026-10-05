@@ -3,7 +3,14 @@
 #include <stdint.h>
 #include "esp_err.h"
 
-esp_err_t net_wifi_connect(int timeout_ms);
+#include <stdbool.h>
+
+// Start WiFi with the credentials saved on the board. false = none saved yet.
+bool net_init(void);
+esp_err_t net_wait(int timeout_ms);          // until connected (ESP_OK) or timeout
+bool net_connected(void);
+// New credentials (from the install page): saved on the board, then joined.
+esp_err_t net_wifi_set(const char *ssid, const char *pass, int timeout_ms);
 // GET url into a fresh heap buffer (caller frees). Fails above max_len.
 // Like net_get, but also reports the HTTP status (e.g. 304 = unchanged).
 esp_err_t net_fetch(const char *url, uint8_t **out, size_t *out_len, size_t max_len, int *status);

@@ -3,14 +3,18 @@ menu "Display hub"
         string "WiFi SSID (2.4 GHz)"
         default ""
         help
-            Filled in by build.sh from RADAR_WIFI_SSID in the shareables .env.
-            Never commit a value here.
+            Developer builds only (build.sh with DEV_WIFI=1): seeds a board that has no
+            WiFi saved. Release builds leave it empty -- boards get WiFi from the install
+            page (Improv over USB). Never commit a value here.
     config HUB_WIFI_PASSWORD
         string "WiFi password"
         default ""
     config HUB_SERVER_URL
         string "Hub base URL (LAN; the board can't use Tailscale)"
         default "http://192.168.86.135:8098"
+    config HUB_ADMIN_URL
+        string "Admin page (shown on a board with no WiFi set up, and sent to the install page)"
+        default "https://displays.swallow-spectrum.ts.net"
     config HUB_FW_CHANNEL
         string "OTA channel (/firmware/<channel>.json on the hub)"
         default "hub"

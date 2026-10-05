@@ -27,6 +27,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "improv.h"
 #include "keys.h"
 #include "net.h"
 #include "nvs.h"
@@ -299,6 +300,29 @@ static void bg_task(void *arg)
     }
 }
 
+// A board with no WiFi saved: say how to set it up, and wait. The install page sends the
+// credentials over USB (improv.c); then boot carries on as normal.
+static void wifi_setup_screen(void)
+{
+    char mac[18], txt[300];
+    net_mac(mac);
+    snprintf(txt, sizeof(txt), "Set up WiFi\n\n#a8b0b8 Plug this display into a computer by USB, open#\n%s/install\n"
+             "#a8b0b8 and click Install, then Connect to WiFi.#\n\n#7f8a94 %s#", CONFIG_HUB_ADMIN_URL, mac);
+    ui_lock(0);
+    lv_obj_t *l = lv_label_create(lv_layer_top());
+    lv_label_set_recolor(l, true);
+    lv_label_set_text(l, txt);
+    lv_obj_set_width(l, BOARD.w - 40);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_center(l);
+    ui_unlock();
+    while (net_wait(60000) != ESP_OK) {}
+    ui_lock(0); lv_obj_delete(l); ui_unlock();
+}
+
 // ---------------------------------------------------------------- main
 void app_main(void)
 {
@@ -307,7 +331,9 @@ void app_main(void)
     ESP_ERROR_CHECK(store_init());
     ui_init();
     ESP_LOGI(TAG, "firmware %s on %s, hub %s", esp_app_get_description()->version, BOARD.board, hub_url());
-    if (net_wifi_connect(30000) != ESP_OK) ESP_LOGW(TAG, "WiFi not up yet -- using cached data, still retrying");
+    improv_start(CONFIG_HUB_ADMIN_URL);                 // WiFi set-up from the install page, any time
+    if (!net_init()) wifi_setup_screen();               // nothing saved yet: wait for the install page
+    else if (net_wait(30000) != ESP_OK) ESP_LOGW(TAG, "WiFi not up yet -- using cached data, still retrying");
     net_mac(s_id);
     setenv("TZ", CONFIG_HUB_TZ, 1); tzset();
     esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
