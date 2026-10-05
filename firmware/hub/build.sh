@@ -48,7 +48,8 @@ esac
 B=build-$BOARD; SDK=sdkconfig.$BOARD
 rm -f $SDK                # regenerate from defaults so secrets/server changes take effect
 # Firmware version = commit + build time. OTA installs whenever the server's differs.
-echo "$(git rev-parse --short HEAD)$(git diff --quiet -- . || echo +)-$(date -u +%m%d%H%M)" > version.txt
+# CI passes FW_VERSION (the commit's own time) so every board's build of a commit agrees.
+echo "${FW_VERSION:-$(git rev-parse --short HEAD)$(git diff --quiet -- . || echo +)-$(date -u +%m%d%H%M)}" > version.txt
 docker run --rm -v "$PWD":/project -w /project -e HOME=/tmp -u "$(id -u):$(id -g)" \
   -e SDKCONFIG_DEFAULTS="sdkconfig.defaults;secrets.defaults" "$IDF_IMAGE" \
   bash -c "idf.py -B $B -D SDKCONFIG=$SDK set-target $TARGET >/dev/null && idf.py -B $B -D SDKCONFIG=$SDK build" 2>&1 \

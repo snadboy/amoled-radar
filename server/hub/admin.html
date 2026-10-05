@@ -62,6 +62,7 @@
   <button data-t="devices" class="on">Devices</button>
   <button data-t="places">Weather places</button>
   <button data-t="views">Aircraft views</button>
+  <button data-t="fw">Firmware</button>
   <button data-t="conn">Connections</button>
 </nav>
 <main>
@@ -77,6 +78,14 @@
     <p class="hint">Areas the aircraft app can show: a centre and the zoom levels (miles from centre to the screen edge).</p>
     <table><thead><tr><th>Name</th><th>Centre</th><th>Zoom levels</th><th></th></tr></thead><tbody id="viewrows"></tbody></table>
     <div class="actions"><button class="b" onclick="editView()">Add a view</button></div>
+  </section>
+
+  <section id="fw">
+    <p class="hint">CI builds firmware on every firmware push (GitHub releases). Nothing reaches a display until you publish
+      a release to its board type; displays pick it up within 6 hours, or 90 s after they restart.
+      New boards: <a href="/install" style="color:var(--accent)">install page</a>.</p>
+    <div class="grid" id="fwgrid"></div>
+    <div class="actions"><button class="b" onclick="loadFirmware(true)">Check GitHub for new releases</button><span class="msg" id="fw_msg"></span></div>
   </section>
 
   <section id="conn">
@@ -276,6 +285,32 @@ async function delView() {
   S = await api("DELETE", "api/views/" + encodeURIComponent(editingView)); vdlg.close(); render();
 }
 
+// ---- firmware
+async function loadFirmware(refresh) {
+  $("fw_msg").textContent = refresh ? "checking…" : "";
+  let F; try { F = await api("GET", "api/firmware" + (refresh ? "?refresh=1" : "")); } catch (e) { $("fw_msg").textContent = e.message; return; }
+  $("fw_msg").textContent = F.releases.length ? "" : "no releases on GitHub yet";
+  $("fwgrid").innerHTML = "";
+  for (const b of F.boards) {
+    const pub = b.published, c = document.createElement("div"); c.className = "card";
+    c.innerHTML = `<h3>${esc(b.name)}</h3>
+      <div class="meta">channel ${esc(b.channel)} · published: ${pub ? esc(pub.version) : "nothing yet"}</div>
+      ${b.devices.length ? b.devices.map(d => `<div class="meta" style="margin:2px 0">${esc(d.name)}: ${esc(d.fw || "?")}
+         ${pub && d.fw && d.fw != pub.version ? '<span class="badge">updates on next check</span>' : ""}</div>`).join("") : '<div class="meta">no devices of this kind</div>'}
+      <label>Release</label><select>${F.releases.map(r => `<option value="${r.tag}">${esc(r.version)} (${r.date.slice(0, 10)})</option>`).join("")}</select>
+      <div class="actions"><button class="b primary" ${F.releases.length ? "" : "disabled"}>Publish to ${esc(b.name.split(" (")[0])} displays</button><span class="msg"></span></div>`;
+    const btn = c.querySelector("button"), msg = c.querySelector(".msg");
+    btn.onclick = async () => {
+      btn.disabled = true; msg.className = "msg"; msg.textContent = "downloading…";
+      try { const r = await api("POST", "api/firmware/publish", {board: b.board, tag: c.querySelector("select").value});
+            msg.className = "msg ok"; msg.textContent = "published " + r.version; setTimeout(() => loadFirmware(), 1500); }
+      catch (e) { msg.className = "msg bad"; msg.textContent = e.message; btn.disabled = false; }
+    };
+    $("fwgrid").append(c);
+  }
+}
+document.querySelector("#tabs button[data-t=fw]").addEventListener("click", () => loadFirmware());
+
 // ---- connections
 async function saveSecrets(keys) {
   const body = {}; for (const k of keys) { const v = $(k).value.trim(); if (v) body[k] = v; }
@@ -296,7 +331,7 @@ async function loadEntities() {
 document.querySelectorAll("input[name=p_src]").forEach(r => r.onchange = () => $("p_ha").style.opacity = r.value == "ha" && r.checked ? 1 : .45);
 
 (async () => {
-  try { S = await api("GET", "api/state"); render(); loadEntities(); }
+  try { S = await api("GET", "api/state"); render(); loadEntities(); if ($("fw").classList.contains("on")) loadFirmware(); }
   catch (e) { $("sub").textContent = "can't reach the hub: " + e.message; }
   setInterval(async () => {                       // refresh online status, without clobbering edits in progress
     if (document.querySelector("dialog[open], .card[data-dirty]") || document.activeElement?.closest(".card")) return;

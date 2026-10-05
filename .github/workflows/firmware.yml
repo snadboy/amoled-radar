@@ -1,0 +1,69 @@
+name: firmware
+
+# Builds the hub firmware for every board and publishes it as a GitHub release
+# "firmware-<sha>". The images carry no secrets (WiFi is set on each board by the
+# install page), so they can be public. Nothing reaches a display until someone
+# presses Publish on the hub's admin page (Firmware tab).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firmware/hub/**'
+      - '.github/workflows/firmware.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        board: [c6, p4]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same script as a local build, so CI and the bench can't drift apart.
+      - name: Build
+        working-directory: firmware/hub
+        run: |
+          export FW_VERSION="$(git rev-parse --short HEAD)-$(git log -1 --format=%cd --date=format-local:%m%d%H%M)"
+          BOARD=${{ matrix.board }} ./build.sh
+
+      - name: Images
+        working-directory: firmware/hub
+        run: |
+          B=build-${{ matrix.board }}
+          CHIP=$( [ ${{ matrix.board }} = p4 ] && echo esp32p4 || echo esp32c6 )
+          mkdir -p dist
+          cp $B/display_hub.bin dist/display-hub-${{ matrix.board }}.bin
+          # one image from offset 0 (bootloader, partition table, OTA data, app) for the install page
+          docker run --rm -v "$PWD":/p -w /p/$B -u "$(id -u):$(id -g)" espressif/idf:v5.5.3 \
+            python -m esptool --chip $CHIP merge_bin -o ../dist/display-hub-${{ matrix.board }}-full.bin @flash_args
+          cp version.txt dist/version.txt
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.board }}
+          path: firmware/hub/dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(cat dist/version.txt)
+          TAG=firmware-${GITHUB_SHA::7}
+          gh release create "$TAG" dist/display-hub-*.bin dist/version.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Firmware $VER" \
+            --notes "Firmware $VER for every board. Publish it to displays from the hub's admin page (Firmware tab); install it on a new board from the hub's install page."

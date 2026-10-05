@@ -14,13 +14,18 @@ access control; there is no separate login.
   PUT    /api/views/<id>            create or replace an aircraft view   DELETE removes it
   PUT    /api/devices/<id>          change a device's settings     DELETE forgets it
   GET    /api/devices/<id>/preview.png   what the device shows when it starts
+  GET    /api/firmware              CI releases, what each board's channel runs, device versions
+  POST   /api/firmware/publish      {"board": "c6"|"p4", "tag": "firmware-<sha>"}
+  GET    /install                   install page (ESP Web Tools: flash + WiFi over USB)
+  GET    /install/manifest.json, /install/<board>-full.bin
 """
 import json, os, re, time
 from zoneinfo import ZoneInfo
 
-from . import core, ha, settings
+from . import core, firmware, ha, settings
 
 PAGE = os.path.join(os.path.dirname(__file__), "admin.html")
+INSTALL = os.path.join(os.path.dirname(__file__), "install.html")
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,12}$")      # store keys are "w:<id>", 16 bytes max
 
 class Bad(Exception): pass
@@ -111,6 +116,14 @@ def handle(h, method, p, q, body, apps):
     try:
         if method == "GET" and p == "/":
             return h.send(open(PAGE, "rb").read(), "text/html; charset=utf-8")
+        if method == "GET" and p == "/install":
+            return h.send(open(INSTALL, "rb").read(), "text/html; charset=utf-8")
+        if method == "GET" and p == "/install/manifest.json":
+            return h.json(firmware.manifest())
+        m = re.match(r"^/install/(c6|p4)-full\.bin$", p)
+        if method == "GET" and m:
+            img = firmware.install_image(m.group(1))
+            return h.send(img, "application/octet-stream") if img else h.json({"error": "no release yet"}, 404)
         if not p.startswith("/api/"):
             return False
         parts = p.split("/")[2:]                    # after /api/
@@ -129,6 +142,20 @@ def handle(h, method, p, q, body, apps):
                 ok, msg = opensky.test()
             else: return False
             return h.json({"ok": ok, "message": msg})
+        if method == "GET" and parts == ["firmware"]:
+            rel = firmware.releases(refresh=q.get("refresh") == "1")
+            fw = {}
+            for d in settings.devices():
+                board = "p4" if d["profile"].get("board", "").startswith("ws-p4") else "c6"
+                fw.setdefault(board, []).append({"name": d["name"], "fw": d["profile"].get("fw", "")})
+            return h.json({"releases": [{k: r[k] for k in ("tag", "version", "date")} for r in rel],
+                           "boards": [dict(b, board=k, published=firmware.published(k), devices=fw.get(k, []))
+                                      for k, b in firmware.BOARDS.items()]})
+        if method == "POST" and parts == ["firmware", "publish"]:
+            if data.get("board") not in firmware.BOARDS: raise Bad("board must be c6 or p4")
+            try: ver = firmware.publish(data["board"], str(data.get("tag", "")))
+            except ValueError as e: raise Bad(str(e))
+            return h.json({"ok": True, "version": ver})
         if method == "GET" and parts == ["ha", "entities"]:
             return h.json(ha.entities(q.get("domain") or None))
         if len(parts) == 2 and parts[0] in ("places", "views"):

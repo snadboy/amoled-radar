@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install a Display</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23ffb703'/%3E%3C/svg%3E">
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+  :root { --bg: #0b0d10; --panel: #14181d; --line: #262c34; --ink: #e7ebf0; --dim: #8a95a3; --accent: #ffb703;
+          font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color-scheme: dark; }
+  body { margin: 0; background: var(--bg); color: var(--ink); }
+  main { max-width: 640px; margin: 0 auto; padding: 28px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } .sub { color: var(--dim); margin: 0 0 22px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+  ol { padding-left: 20px; margin: 0; } li { margin: 6px 0; }
+  .dim { color: var(--dim); font-size: 13.5px; } a { color: var(--accent); }
+  esp-web-install-button { --esp-tools-button-color: #ffb703; --esp-tools-button-text-color: #1a1200; --esp-tools-button-border-radius: 8px; }
+  .bad { color: #ff5d5d; } #ver { color: var(--dim); font-size: 13px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Install a Display</h1>
+  <p class="sub">Flashes the hub firmware onto a board and gives it your WiFi, from this browser, over USB.</p>
+  <div class="card">
+    <ol>
+      <li>Plug the board into this computer with a USB-C <b>data</b> cable.<br>
+        <span class="dim">3.5" P4 board: use the port marked <b>USB to UART</b>.</span></li>
+      <li>Click <b>Install</b> and pick the board's port. The page works out which board it is.</li>
+      <li>When it asks, enter the WiFi name and password. They go straight to the board over USB and are stored only there.</li>
+      <li>The display restarts, joins WiFi and appears on the <a href="/">admin page</a> under Devices, ready to name and set up.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <esp-web-install-button manifest="/install/manifest.json">
+      <span slot="unsupported" class="bad">This browser can't talk to USB devices. Use Chrome or Edge on a computer.</span>
+      <span slot="not-allowed" class="bad">USB access needs a secure page: open this over https (the hub's Tailscale address).</span>
+    </esp-web-install-button>
+    <div id="ver"></div>
+  </div>
+  <p class="dim">Re-installing a board you already use? Choose <b>not</b> to erase when asked, and it keeps its WiFi.
+    To move a board to another network, click Install, then use <b>Change Wi-Fi</b> from the menu.</p>
+</main>
+<script>
+fetch("/install/manifest.json").then(r => r.json()).then(m => {
+  document.getElementById("ver").textContent = m.builds.length
+    ? "Firmware " + m.version + " · boards: " + m.builds.map(b => b.chipFamily).join(", ")
+    : "No firmware release yet: CI builds one on the next firmware push.";
+}).catch(() => {});
+</script>
+</body>
+</html>

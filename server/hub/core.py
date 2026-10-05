@@ -87,7 +87,9 @@ def handle(h, p, q, apps):
         dev_id = q.get("id", "")
         if not _ID_OK.match(dev_id):
             return h.json({"error": "bad or missing id"}, 400)
-        settings.register(dev_id, {k: q[k] for k in PROFILE_KEYS if k in q})
+        prof = {k: q[k] for k in PROFILE_KEYS if k in q}
+        if "fw" in prof: prof["fw"] = prof["fw"].replace(" ", "+")     # "+" in a query string arrives as a space
+        settings.register(dev_id, prof)
         _touch(dev_id, ip)
         return h.json(hello_reply(settings.device(dev_id), apps))
     parts = p.split("/")                         # ['', 'device', '<id>', 'state']
