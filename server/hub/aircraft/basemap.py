@@ -176,6 +176,16 @@ def render_level(cache, view, towns, range_mi, w, h, r):
     ppm = min(w, h) / 2.0 / range_mi
     c = (w // 2, h // 2)
     f = font(11)
+    if view.get("home"):                 # panned: no rings round an arbitrary point; mark home instead
+        hx, hy = merc(view["home"]["lat"], view["home"]["lon"])
+        x, y = w / 2 + (hx - cx) / mpp, h / 2 - (hy - cy) / mpp
+        if -12 < x < w + 12 and -12 < y < h + 12:
+            amber = (255, 183, 3, 255)
+            d.ellipse((x - 9, y - 9, x + 9, y + 9), outline=amber, width=2)
+            d.line((x - 5, y, x + 5, y), fill=amber, width=2); d.line((x, y - 5, x, y + 5), fill=amber, width=2)
+        img.paste(ov, (0, 0), ov)
+        print("[aircraft] %s %d mi %dx%d: zoom %d, %d towns" % (view["id"], range_mi, w, h, z, n), flush=True)
+        return img, mpp
     for miles in rings_for(range_mi):
         rr = miles * ppm
         d.ellipse((c[0] - rr, c[1] - rr, c[0] + rr, c[1] + rr), outline=RING_RGB + (int(255 * RING_ALPHA),))
@@ -208,7 +218,9 @@ def encode_bundle(view, levels, w, h):
         px = rgb565_le(img)
         table += struct.pack("<HHfII", int(rng), 0, mpp, off, len(px))
         blobs.append(px); off += len(px)
-    hdr = struct.pack("<4sHHHHIddff", b"ABN1", 1, len(levels), w, h, 0, mx, my, view["lat"], view["lon"])
+    # mx/my: the map's centre; lat/lon: home (a panned map's centre is not), for "mi of home"
+    home = view.get("home") or view
+    hdr = struct.pack("<4sHHHHIddff", b"ABN1", 1, len(levels), w, h, 0, mx, my, home["lat"], home["lon"])
     return hdr + table + b"".join(blobs)
 
 class Bundles:
@@ -230,7 +242,10 @@ class Bundles:
         if not mine:
             ev.wait(); return self.mem.get(key)
         try:
-            towns = places(self.cache, view)
+            try: towns = places(self.cache, view)
+            except Exception:                  # a panned view: Overpass is often busy; fall back to home's towns
+                if not view.get("home"): raise
+                towns = places(self.cache, dict(view, **view["home"]))
             levels = []
             for rng in view["levels"]:
                 img, mpp = render_level(self.cache, view, towns, rng, w, h, r)

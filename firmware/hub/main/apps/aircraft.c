@@ -10,6 +10,9 @@
 // /aircraft/info/<icao> for type, registration, owner and a vetted route.
 //
 // Touch: tap a plane for details, the range badge to zoom, empty map to toggle labels.
+// A swipe pans the map 50 mi (one step each way; the hub's poll box covers it); the
+// offset pill, 10 min without a swipe, or the hub (HA) bring it home. A new map is
+// staged by the net task and swapped in by the UI tick, so it changes without a restart.
 // KEY: short = zoom, hold = the airborne plane nearest home (zoomed to fit).
 #include <math.h>
 #include <stdio.h>
@@ -90,12 +93,25 @@ typedef struct {
     lv_image_dsc_t img;
 } level_t;
 
-static char s_view[16] = "home", s_key[16];
-static level_t s_levels[MAX_LEVELS];
+static char s_view[16] = "home";
+static level_t s_levels[MAX_LEVELS];      // the map on screen (UI side)
 static int s_nlevels, s_level, s_slot = -1;
-static double s_home_mx, s_home_my, s_home_lat, s_home_lon;
-static volatile bool s_bundle_ready;      // set by the net task once the levels are mapped
+static double s_home_mx, s_home_my, s_home_lat, s_home_lon;   // map centre (Mercator) / home
 static bool s_bundle_shown;
+static int s_map_dx, s_map_dy;            // the pan of the map on screen
+
+// A mapped bundle, handed from the net task to the UI: the net task fills it only while
+// `ready` is false; the UI adopts it and clears `ready`.
+typedef struct { level_t lv[MAX_LEVELS]; int n, slot, dx, dy; double mx, my, lat, lon; } mapset_t;
+static mapset_t s_stage;
+static volatile bool s_stage_ready;
+static char s_loaded[16];                 // net task: store key of the bundle staged or on screen
+
+#define PAN_MAX      1
+#define PAN_IDLE_MS  (10 * 60 * 1000)
+static volatile int s_dx, s_dy;           // wanted pan, in 50 mi steps east / north
+static volatile bool s_pan_dirty;         // net task: fetch the new map and states now
+static int64_t s_pan_at, s_gesture_at;
 
 // ---------------------------------------------------------------- UI state
 static track_t s_tracks[MAX_AIRCRAFT];
@@ -108,7 +124,8 @@ static volatile bool s_active, s_screen_on = true;
 static TaskHandle_t s_net;
 
 static lv_obj_t *s_root, *s_map, *s_radar, *s_msg;
-static lv_obj_t *s_pills[4];            // range, clock, status, attribution: labels keep out
+static lv_obj_t *s_pills[5];            // range, clock, status, attribution, offset: labels keep out
+static lv_obj_t *s_pan_label;
 static lv_obj_t *s_range_label, *s_clock_label, *s_wifi_label, *s_status_label;
 static lv_obj_t *s_panel, *s_panel_title, *s_panel_route, *s_panel_aircraft, *s_panel_body;
 
@@ -275,8 +292,9 @@ static bool label_fits(int32_t x0, int32_t y0, int32_t x1, int32_t y1)
 {
     if (!in_glass(x0, y0) || !in_glass(x1, y0) || !in_glass(x0, y1) || !in_glass(x1, y1)) return false;
     int32_t rx = lv_obj_get_x(s_root), ry = lv_obj_get_y(s_root);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         lv_area_t a;
+        if (lv_obj_has_flag(s_pills[i], LV_OBJ_FLAG_HIDDEN)) continue;
         lv_obj_get_coords(s_pills[i], &a);
         if (x0 <= a.x2 - rx && x1 >= a.x1 - rx && y0 <= a.y2 - ry && y1 >= a.y1 - ry) return false;
     }
@@ -467,8 +485,37 @@ static void set_level(int level)
 
 static void range_click_cb(lv_event_t *e) { set_level(s_level + 1); }
 
+static void pan_text(char *out, size_t n, int dx, int dy)
+{
+    snprintf(out, n, "50 mi %s%s", dy > 0 ? "N" : dy < 0 ? "S" : "", dx > 0 ? "E" : dx < 0 ? "W" : "");
+}
+
+static void pan_to(int dx, int dy)        // any task: the net task and the UI tick pick it up
+{
+    dx = dx < -PAN_MAX ? -PAN_MAX : dx > PAN_MAX ? PAN_MAX : dx;
+    dy = dy < -PAN_MAX ? -PAN_MAX : dy > PAN_MAX ? PAN_MAX : dy;
+    s_pan_at = ms();
+    if (dx == s_dx && dy == s_dy) return;
+    s_dx = dx; s_dy = dy; s_pan_dirty = true;
+    ESP_LOGI(TAG, "pan -> %d,%d", dx, dy);
+    if (s_net) xTaskNotifyGive(s_net);
+}
+
+static void pan_pill_cb(lv_event_t *e) { pan_to(0, 0); }
+
+static void gesture_cb(lv_event_t *e)
+{
+    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
+    s_gesture_at = ms();
+    if (dir == LV_DIR_LEFT) pan_to(s_dx + 1, s_dy);          // the map follows the finger
+    else if (dir == LV_DIR_RIGHT) pan_to(s_dx - 1, s_dy);
+    else if (dir == LV_DIR_TOP) pan_to(s_dx, s_dy - 1);
+    else if (dir == LV_DIR_BOTTOM) pan_to(s_dx, s_dy + 1);
+}
+
 static void radar_click_cb(lv_event_t *e)
 {
+    if (ms() - s_gesture_at < 400) return;                  // the end of a swipe, not a tap
     lv_point_t p;
     lv_indev_get_point(lv_indev_active(), &p);
     p.x -= lv_obj_get_x(s_root);          // undo pixel shift
@@ -547,12 +594,38 @@ static void pixel_shift(void)
     lv_obj_set_pos(s_root, offs[i][0], offs[i][1]);
 }
 
-static void show_bundle(void)
+// Take the net task's staged map: new levels, centre and home; the old slot is released.
+static void adopt_map(void)
 {
+    int old = s_slot;
+    memcpy(s_levels, s_stage.lv, sizeof(s_levels));
+    s_nlevels = s_stage.n; s_slot = s_stage.slot;
+    s_home_mx = s_stage.mx; s_home_my = s_stage.my; s_home_lat = s_stage.lat; s_home_lon = s_stage.lon;
+    s_map_dx = s_stage.dx; s_map_dy = s_stage.dy;
+    s_stage_ready = false;
     s_bundle_shown = true;
     lv_obj_add_flag(s_msg, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_map, LV_OBJ_FLAG_HIDDEN);
-    set_level(s_level < s_nlevels ? s_level : 0);
+    set_level(s_level < s_nlevels ? s_level : 0);           // points the image at the new levels
+    if (old >= 0 && old != s_slot) store_unmap(old);
+    ESP_LOGI(TAG, "map %d,%d from slot %d", s_map_dx, s_map_dy, s_slot);
+}
+
+static void update_pan_ui(void)
+{
+    if ((s_dx || s_dy) && ms() - s_pan_at > PAN_IDLE_MS) pan_to(0, 0);      // back home after 10 min
+    char t[24];
+    if (s_dx || s_dy) {
+        pan_text(t, sizeof(t), s_dx, s_dy);
+        lv_label_set_text_fmt(s_pan_label, "%s  " LV_SYMBOL_CLOSE, t);
+        lv_obj_remove_flag(s_pills[4], LV_OBJ_FLAG_HIDDEN);
+    } else lv_obj_add_flag(s_pills[4], LV_OBJ_FLAG_HIDDEN);
+    if (s_bundle_shown && (s_map_dx != s_dx || s_map_dy != s_dy)) {      // the new map is on its way
+        if (s_dx || s_dy) lv_label_set_text_fmt(s_msg, "Loading %s...", t);
+        else lv_label_set_text(s_msg, "Loading home...");
+        lv_obj_remove_flag(s_msg, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_msg);
+    }
 }
 
 static void tick_cb(lv_timer_t *timer)
@@ -560,7 +633,8 @@ static void tick_cb(lv_timer_t *timer)
     static uint32_t ticks;
     if (!s_active) return;
     ticks++;
-    if (s_bundle_ready && !s_bundle_shown) show_bundle();
+    if (s_stage_ready) adopt_map();
+    update_pan_ui();
     if (s_batch.ready) { merge_batch(); s_batch.ready = false; }
     if (ticks % PIXEL_SHIFT_S == 0) pixel_shift();
     update_status();
@@ -587,8 +661,8 @@ static uint32_t id32(const char *bundle_id)
     return v ? v : 1;
 }
 
-// Map a stored ABN1 bundle and fill s_levels. Only called before s_bundle_ready is set.
-static bool map_bundle(int slot)
+// Map a stored ABN1 bundle into s_stage. Only called while s_stage_ready is false.
+static bool map_bundle(int slot, int dx, int dy)
 {
     const uint8_t *p = store_map(slot);
     if (!p) return false;
@@ -601,15 +675,15 @@ static bool map_bundle(int slot)
         return false;
     }
     float lat, lon;
-    memcpy(&s_home_mx, p + 16, 8); memcpy(&s_home_my, p + 24, 8);
+    memcpy(&s_stage.mx, p + 16, 8); memcpy(&s_stage.my, p + 24, 8);
     memcpy(&lat, p + 32, 4); memcpy(&lon, p + 36, 4);
-    s_home_lat = lat; s_home_lon = lon;
+    s_stage.lat = lat; s_stage.lon = lon;
     for (int i = 0; i < n; i++) {
         const uint8_t *e = p + 40 + 16 * i;
         uint16_t rng; float mpp; uint32_t off, len;
         memcpy(&rng, e, 2); memcpy(&mpp, e + 4, 4); memcpy(&off, e + 8, 4); memcpy(&len, e + 12, 4);
         if (len != (uint32_t)w * h * 2 || off + len > store_slot_capacity()) return false;
-        level_t *L = &s_levels[i];
+        level_t *L = &s_stage.lv[i];
         L->range_mi = rng; L->mpp = mpp;
         memset(&L->img, 0, sizeof(L->img));
         L->img.header.magic = LV_IMAGE_HEADER_MAGIC;
@@ -618,15 +692,29 @@ static bool map_bundle(int slot)
         L->img.data_size = len;
         L->img.data = p + off;
     }
-    s_nlevels = n;
+    s_stage.n = n; s_stage.slot = slot; s_stage.dx = dx; s_stage.dy = dy;
     return true;
 }
 
-// Make sure the current bundle for this view and profile is in flash and mapped.
+// Hub id and store key of the view at a pan ("home@1,0", "a:~ed" + view).
+static void vid_of(int dx, int dy, char out[24])
+{
+    if (dx || dy) snprintf(out, 24, "%s@%d,%d", s_view, dx, dy);
+    else strlcpy(out, s_view, 24);
+}
+static void key_of(int dx, int dy, char out[16])
+{
+    if (dx || dy) snprintf(out, 16, "a:~%c%c%.10s", 'd' + dx, 'd' + dy, s_view);
+    else snprintf(out, 16, "a:%.13s", s_view);   // store keys are 15 chars max
+}
+
+// Make sure the current bundle for this view, pan and profile is in flash and staged.
 static void sync_bundle(void)
 {
-    char url[URL_MAX]; uint8_t *js; size_t len;
-    snprintf(url, sizeof(url), "%s/aircraft/%s/manifest.json?w=%d&h=%d&r=%d", hub_url(), s_view, BOARD.w, BOARD.h, BOARD.corner_r);
+    char url[URL_MAX], id[24], key[16]; uint8_t *js; size_t len;
+    int dx = s_dx, dy = s_dy;
+    vid_of(dx, dy, id); key_of(dx, dy, key);
+    snprintf(url, sizeof(url), "%s/aircraft/%s/manifest.json?w=%d&h=%d&r=%d", hub_url(), id, BOARD.w, BOARD.h, BOARD.corner_r);
     uint32_t want = 0, crc = 0; size_t size = 0;
     if (net_get(url, &js, &len, 8192) == ESP_OK) {
         cJSON *m = cJSON_Parse((char *)js);
@@ -639,16 +727,19 @@ static void sync_bundle(void)
         cJSON_Delete(m);
     }
     loop_hdr_t cur; int cs;
-    bool have = store_get(s_key, &cur, &cs);
+    bool have = store_get(key, &cur, &cs);
     if (have && (!want || cur.loop_id == want)) {           // current, or the hub is down: use what we have
-        if (!s_bundle_ready && map_bundle(cs)) { s_slot = cs; s_bundle_ready = true; ESP_LOGI(TAG, "bundle from slot %d", cs); }
+        if (strcmp(s_loaded, key) && !s_stage_ready && map_bundle(cs, dx, dy)) {
+            strlcpy(s_loaded, key, sizeof(s_loaded)); s_stage_ready = true;
+            ESP_LOGI(TAG, "bundle %s from slot %d", key, cs);
+        }
         return;
     }
     if (!want) return;
     if (!size || size > store_slot_capacity()) { ESP_LOGW(TAG, "bundle size %u unusable", (unsigned)size); return; }
-    int slot = store_begin(s_key, true);
+    int slot = store_begin(key, true);
     if (slot < 0) { ESP_LOGW(TAG, "no free slot for the bundle"); return; }
-    snprintf(url, sizeof(url), "%s/aircraft/%s/bundle.bin?w=%d&h=%d&r=%d", hub_url(), s_view, BOARD.w, BOARD.h, BOARD.corner_r);
+    snprintf(url, sizeof(url), "%s/aircraft/%s/bundle.bin?w=%d&h=%d&r=%d", hub_url(), id, BOARD.w, BOARD.h, BOARD.corner_r);
     sink_t sk = { .slot = slot, .off = STORE_DATA_OFF };
     size_t got;
     int64_t t0 = ms();
@@ -658,26 +749,24 @@ static void sync_bundle(void)
         return;
     }
     loop_hdr_t hdr = {0};
-    strlcpy(hdr.view, s_key, sizeof(hdr.view));
+    strlcpy(hdr.view, key, sizeof(hdr.view));
     hdr.loop_id = want;
     hdr.nframes = 1;
     store_commit(slot, &hdr);
     ESP_LOGI(TAG, "bundle %08lx cached in slot %d (%u KB, %lld ms)", (unsigned long)want, slot, (unsigned)(got / 1024), ms() - t0);
-    if (s_bundle_ready) {
-        // A new map for a view already on screen (the hub re-rendered it): switch on
-        // next boot rather than swap images under LVGL's feet.
-        return;
-    }
-    if (map_bundle(slot)) { s_slot = slot; s_bundle_ready = true; }
+    if (dx != s_dx || dy != s_dy) return;                  // panned again meanwhile: the next sync
+    while (s_stage_ready && s_active) vTaskDelay(pdMS_TO_TICKS(50));   // the UI is adopting the last one
+    if (!s_stage_ready && map_bundle(slot, dx, dy)) { strlcpy(s_loaded, key, sizeof(s_loaded)); s_stage_ready = true; }
 }
 
+static bool have_seq;                     // cleared on a pan: the new view's states differ
 static void fetch_states(void)
 {
     static uint32_t seq;
-    static bool have_seq;
-    char url[URL_MAX]; uint8_t *b; size_t len; int status;
-    if (have_seq) snprintf(url, sizeof(url), "%s/aircraft/%s/states.bin?since=%lu", hub_url(), s_view, (unsigned long)seq);
-    else snprintf(url, sizeof(url), "%s/aircraft/%s/states.bin", hub_url(), s_view);
+    char url[URL_MAX], id[24]; uint8_t *b; size_t len; int status;
+    vid_of(s_dx, s_dy, id);
+    if (have_seq) snprintf(url, sizeof(url), "%s/aircraft/%s/states.bin?since=%lu", hub_url(), id, (unsigned long)seq);
+    else snprintf(url, sizeof(url), "%s/aircraft/%s/states.bin", hub_url(), id);
     if (net_fetch(url, &b, &len, 20 + 48 * 256, &status) != ESP_OK) {
         if (status != 304) s_status = ST_HUB_DOWN;
         return;
@@ -754,8 +843,11 @@ static void net_task(void *arg)
     for (;;) {
         if (!s_active || !s_screen_on) { ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)); states_at = 0; continue; }
         int64_t now = ms();
-        // Until it's mapped, retry the bundle every 10 s; then check for a new one hourly.
-        if (!bundle_at || now - bundle_at > (s_bundle_ready ? 3600 * 1000 : 10 * 1000)) { sync_bundle(); bundle_at = ms(); }
+        if (s_pan_dirty) { s_pan_dirty = false; bundle_at = 0; states_at = 0; have_seq = false; }
+        char key[16]; key_of(s_dx, s_dy, key);
+        bool current = !strcmp(s_loaded, key);
+        // Until it's staged, retry the bundle every 3 s; then check for a new one hourly.
+        if (!bundle_at || now - bundle_at > (current ? 3600 * 1000 : 3000)) { sync_bundle(); bundle_at = ms(); }
         if (s_req.pending) fetch_info();
         if (!states_at || now - states_at > STATES_MS) { fetch_states(); states_at = ms(); }
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
@@ -806,6 +898,8 @@ static void build_ui(void)
     lv_obj_add_flag(s_radar, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_radar, radar_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
     lv_obj_add_event_cb(s_radar, radar_click_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_remove_flag(s_radar, LV_OBJ_FLAG_GESTURE_BUBBLE);    // swipes come here, not to the screen
+    lv_obj_add_event_cb(s_radar, gesture_cb, LV_EVENT_GESTURE, NULL);
 
     // Range badge (tap to zoom). These pill positions match the hub's
     // basemap.ui_boxes(), which keeps town labels out from under them.
@@ -840,6 +934,18 @@ static void build_ui(void)
     lv_obj_set_style_text_font(attrib, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(attrib, lv_color_hex(0x707070), 0);
     lv_obj_align(attrib, LV_ALIGN_BOTTOM_RIGHT, -in - 4, -18);
+
+    // Offset pill while panned (tap = home). Top centre: below the range/clock pills on
+    // a small panel.
+    lv_obj_t *pan = s_pills[4] = make_pill(s_root, LV_ALIGN_TOP_MID, 0, W >= 400 ? 14 : 48);
+    lv_obj_set_style_border_color(pan, lv_color_hex(0xffb703), 0);
+    lv_obj_set_style_border_width(pan, 2, 0);
+    lv_obj_add_flag(pan, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_ext_click_area(pan, 12);
+    lv_obj_add_event_cb(pan, pan_pill_cb, LV_EVENT_CLICKED, NULL);
+    s_pan_label = lv_label_create(pan);
+    lv_obj_set_style_text_font(s_pan_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_pan_label, lv_color_hex(0xffcd5a), 0);
 
     // Selected-aircraft panel.
     s_panel = lv_obj_create(s_root);
@@ -883,7 +989,6 @@ static void app_init(const cJSON *views)
                 *sl = cJSON_GetObjectItem(v, "start_level");
     if (cJSON_IsString(id)) strlcpy(s_view, id->valuestring, sizeof(s_view));
     if (cJSON_IsNumber(sl) && sl->valueint >= 0 && sl->valueint < MAX_LEVELS) s_level = sl->valueint;   // the hub's starting zoom
-    snprintf(s_key, sizeof(s_key), "a:%.13s", s_view);   // store keys are 15 chars max
     s_info_mx = xSemaphoreCreateMutex();
     ui_lock(0);
     build_ui();
@@ -924,8 +1029,21 @@ static void app_screen(bool on)
     if (on) xTaskNotifyGive(s_net);
 }
 
-static const char *app_current(void) { return s_view; }
-static void app_show(const char *view) {}            // one view per device
+static const char *app_current(void)
+{
+    static char id[24];
+    vid_of(s_dx, s_dy, id);
+    return id;
+}
+
+// One view per device; "<view>@<dx>,<dy>" pans it (HA's Pan select).
+static void app_show(const char *view)
+{
+    size_t n = strlen(s_view);
+    int dx = 0, dy = 0;
+    if (strncmp(view, s_view, n) || (view[n] && (view[n] != '@' || sscanf(view + n + 1, "%d,%d", &dx, &dy) != 2))) return;
+    pan_to(dx, dy);
+}
 
 const app_t APP_AIRCRAFT = {
     .id = "aircraft", .name = "Aircraft", .store_prefix = 'a',

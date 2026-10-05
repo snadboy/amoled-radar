@@ -52,10 +52,29 @@ def _poller(view):
             threading.Thread(target=p.run, daemon=True).start()
         return p
 
+def _within(view, s):
+    """A poller snapshot cut to the aircraft within the view's radius of its centre (the
+    poll box is bigger, to cover pans)."""
+    return dict(s, aircraft=[a for a in s["aircraft"] if miles_from(view, a) <= view["radius_mi"]])
+
 def snapshots():
     """{view id: poller snapshot + status name} for the views being polled (for MQTT)."""
     with _plock: pollers = dict(_pollers)
-    return {vid: dict(p.snapshot(), status_name=opensky.ST_NAMES[p.snapshot()["status"]]) for vid, p in pollers.items()}
+    return {vid: dict(_within(p.view, p.snapshot()), status_name=opensky.ST_NAMES[p.snapshot()["status"]])
+            for vid, p in pollers.items()}
+
+# Panned views: "<view>@<dx>,<dy>", one 50 mi step at most (the poll box covers that).
+PAN_MAX = 1
+
+def air_view(vid):
+    """A view, or a panned copy of it: centre moved, the real home kept as "home"."""
+    p = core.parse_pan(vid, PAN_MAX)
+    if p is None: return None
+    base = settings.air_view(p[0])
+    if not base or p[1:] == (0, 0): return base
+    lat, lon = core.pan_centre(base["lat"], base["lon"], p[1], p[2])
+    return dict(base, id=vid, lat=lat, lon=lon, home={"lat": base["lat"], "lon": base["lon"]},
+                pan_label=core.pan_label(p[1], p[2]))
 
 def miles_from(view, ac):
     return opensky.miles_between(view["lat"], view["lon"], ac["lat"], ac["lon"])
@@ -185,7 +204,7 @@ def preview_png(view, w, h, r, level=0):
     (without waking the OpenSky poller)."""
     entry = _bundles.get(view, w, h, r)
     if entry is None: return None
-    return render_preview(view, entry, level % len(entry["levels"]), _poller(view).snapshot(), w, h)
+    return render_preview(view, entry, level % len(entry["levels"]), _within(view, _poller(view).snapshot()), w, h)
 
 # --- routes ---
 
@@ -228,13 +247,14 @@ def handle(h, p, q):
         return h.json([view_summary(v) for v in settings.air_views()])
     if len(parts) == 4 and parts[2] == "info":
         return _info(h, parts[3], q)
-    view = settings.air_view(parts[2]) if len(parts) == 4 else None
+    view = air_view(parts[2]) if len(parts) == 4 else None
     if view is None:
         return False
-    what, poller = parts[3], _poller(view)
+    # one poller per real view; a panned view reads its states, cut to its own centre
+    what, poller = parts[3], _poller(settings.air_view(core.parse_pan(parts[2], PAN_MAX)[0]))
     if what in ("states.bin", "states.json"):
         poller.touch()
-        s = poller.snapshot()
+        s = _within(view, poller.snapshot())
         if what == "states.json":
             return h.json(_states_json(s))
         if q.get("since") == str(s["seq"]):
@@ -254,5 +274,5 @@ def handle(h, p, q):
         try: level = int(q.get("level", "0")) % len(entry["levels"])
         except ValueError: level = 0
         poller.touch()
-        return h.send(render_preview(view, entry, level, poller.snapshot(), prof[0], prof[1]), "image/png")
+        return h.send(render_preview(view, entry, level, _within(view, poller.snapshot()), prof[0], prof[1]), "image/png")
     return False

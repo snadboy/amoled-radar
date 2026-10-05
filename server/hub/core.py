@@ -15,7 +15,7 @@ changed on the admin page (admin.py), never over the LAN port.
   /firmware/<channel>.json|.bin   OTA per channel ("hub" = C6 boards, "hub-p4" = P4)
   /device.json           legacy alias of /device/<id>/state (amoled-radar firmware)
 """
-import hashlib, os, re, threading, time
+import hashlib, math, os, re, threading, time
 
 from . import settings
 from .ha import ha_entity
@@ -145,3 +145,28 @@ def handle(h, p, q, apps):
         try: return h.send(open(os.path.join(_fw_dir(channel), "firmware.bin"), "rb").read(), "application/octet-stream")
         except OSError: return h.json({"error": "no firmware published"}, 404)
     return False
+
+
+# ---------------------------------------------------------------- panned views
+# A device can move its view off centre in PAN_MI steps (swipe, or HA): the view id is
+# then "<view>@<dx>,<dy>" (steps east, north). Weather allows 3 steps, aircraft 1.
+PAN_MI = 50
+_PAN_RE = re.compile(r"^([a-z0-9_-]+)@(-?\d+),(-?\d+)$")
+
+def parse_pan(vid, max_steps):
+    """(base id, dx, dy); dx = dy = 0 for a plain id; None if malformed or too far."""
+    m = _PAN_RE.match(vid or "")
+    if not m: return None if "@" in (vid or "") else (vid, 0, 0)
+    base, dx, dy = m.group(1), int(m.group(2)), int(m.group(3))
+    if abs(dx) > max_steps or abs(dy) > max_steps: return None
+    return base, dx, dy
+
+def pan_label(dx, dy):
+    """"50 mi NE", "100 mi N, 50 mi E" """
+    ns = "N" if dy > 0 else "S"; ew = "E" if dx > 0 else "W"
+    if dx and dy and abs(dx) == abs(dy): return "%d mi %s%s" % (abs(dy) * PAN_MI, ns, ew)
+    parts = (["%d mi %s" % (abs(dy) * PAN_MI, ns)] if dy else []) + (["%d mi %s" % (abs(dx) * PAN_MI, ew)] if dx else [])
+    return ", ".join(parts)
+
+def pan_centre(lat, lon, dx, dy):
+    return (lat + dy * PAN_MI / 69.05, lon + dx * PAN_MI / (69.17 * math.cos(math.radians(lat))))

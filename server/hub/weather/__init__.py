@@ -21,7 +21,7 @@ Endpoints (the old amoled-radar paths stay as aliases until both boards migrate:
   /weather/ui/picker.jpg?hl=&cur=  city picker
   /weather/ui/hold.jpg             "Hold to turn off" pill
 """
-import io, json, math, os, re, threading, time, zlib
+import io, json, os, threading, time, zlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -61,26 +61,14 @@ def _cities():
 # then "<city>@<dx>,<dy>" (east, north; at most PAN_MAX steps each way). Panned loops
 # are rendered on demand, only for the profiles that ask, and dropped PAN_KEEP_S after
 # the last request.
-PAN_MI, PAN_MAX, PAN_KEEP_S = 50, 3, 15 * 60
-_PAN_RE = re.compile(r"^([a-z0-9_-]+)@(-?\d+),(-?\d+)$")
+PAN_MAX, PAN_KEEP_S = 3, 15 * 60
 _pans = {}                             # (view id, profile key) -> last request time
 _pan_wake = threading.Event()
 _maps = None                           # the latest RainViewer index (radar_loop fetches it)
-
-def pan_label(dx, dy):
-    """"50 mi NE", "100 mi N, 50 mi E" """
-    ns = "N" if dy > 0 else "S"; ew = "E" if dx > 0 else "W"
-    if dx and dy and abs(dx) == abs(dy): return "%d mi %s%s" % (abs(dy) * PAN_MI, ns, ew)
-    parts = (["%d mi %s" % (abs(dy) * PAN_MI, ns)] if dy else []) + (["%d mi %s" % (abs(dx) * PAN_MI, ew)] if dx else [])
-    return ", ".join(parts)
+pan_label = core.pan_label
 
 def parse_pan(vid):
-    """(city id, dx, dy); dx = dy = 0 for a plain city id; None if malformed or too far."""
-    m = _PAN_RE.match(vid or "")
-    if not m: return (vid, 0, 0)
-    cid, dx, dy = m.group(1), int(m.group(2)), int(m.group(3))
-    if abs(dx) > PAN_MAX or abs(dy) > PAN_MAX: return None
-    return (cid, dx, dy)
+    return core.parse_pan(vid, PAN_MAX)
 
 def _place(vid):
     """A city, or a panned view of one: the city moved by dx/dy steps, its own position
@@ -90,8 +78,7 @@ def _place(vid):
     cid, dx, dy = p
     base = settings.place(cid)
     if not base or (dx, dy) == (0, 0): return base
-    lat = base["lat"] + dy * PAN_MI / 69.05
-    lon = base["lon"] + dx * PAN_MI / (69.17 * math.cos(math.radians(base["lat"])))
+    lat, lon = core.pan_centre(base["lat"], base["lon"], dx, dy)
     towns = [t for t in base.get("places", []) if t[0] != base["name"]] + [[base["name"], base["lat"], base["lon"], True]]
     return dict(base, id=vid, lat=lat, lon=lon, places=towns, home=base, pan=(dx, dy), pan_label=pan_label(dx, dy))
 

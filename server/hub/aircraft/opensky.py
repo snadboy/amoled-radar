@@ -77,7 +77,7 @@ def _parse(row, view):
     if HIDE_ON_GROUND and ground:
         return None
     lat, lon = float(row[6]), float(row[5])
-    if miles_between(view["lat"], view["lon"], lat, lon) > view["radius_mi"]:
+    if miles_between(view["lat"], view["lon"], lat, lon) > poll_radius(view):
         return None
     alt = _num(row[7])
     return {"icao": int(row[0], 16), "callsign": (row[1] or "").strip(), "country": row[2] or "",
@@ -88,9 +88,19 @@ def _parse(row, view):
             "category": int(row[17]) if len(row) > 17 and row[17] is not None else 0,
             "on_ground": ground}
 
+# The box also covers a one-step pan each way (the device's swipe, 50 mi, diagonals too)
+# while it stays within OpenSky's 1-credit size (25 square degrees); devices get the
+# aircraft within radius_mi of whatever centre they show.
+PAN_COVER_MI = 71
+
+def poll_radius(view):
+    r = view["radius_mi"] + PAN_COVER_MI
+    dlat, dlon = r / 69.0, r / (69.17 * math.cos(math.radians(view["lat"])))
+    return r if (2 * dlat) * (2 * dlon) <= 25 else view["radius_mi"]
+
 def fetch_states(view):
     """(server_time, [aircraft], credits_left) for the view's box."""
-    lat0, lon0, r = view["lat"], view["lon"], view["radius_mi"]
+    lat0, lon0, r = view["lat"], view["lon"], poll_radius(view)
     dlat, dlon = r / 69.0, r / (69.17 * math.cos(math.radians(lat0)))
     q = urllib.parse.urlencode({"lamin": "%.4f" % (lat0 - dlat), "lomin": "%.4f" % (lon0 - dlon),
                                 "lamax": "%.4f" % (lat0 + dlat), "lomax": "%.4f" % (lon0 + dlon),
