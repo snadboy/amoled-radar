@@ -9,7 +9,12 @@
 // LAST, so a bundle is either complete or invisible. Keys are namespaced by app
 // ("w:geneva", "a:home"). Weather loops use the frame table; other bundles keep
 // their own index inside the data (e.g. ABN1) and set nframes to their section count.
+#include "sdkconfig.h"
+#if CONFIG_IDF_TARGET_ESP32
+#define STORE_SLOTS       3     // 4 MB boards: ~460 KB each (a 240x240 four-level ABN1 just fits)
+#else
 #define STORE_SLOTS       6
+#endif
 #define STORE_MAX_FRAMES  96
 #define STORE_DATA_OFF    4096
 

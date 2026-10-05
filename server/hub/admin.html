@@ -287,6 +287,7 @@ function renderEditor() {
       <fieldset><legend>Weather</legend>
         ${S.places.map(p => `<label class="inline"><input type="checkbox" data-place="${p.id}" ${d.weather.places.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}
         <label>Starts on</label><select data-k="wstart">${S.places.map(p => `<option value="${p.id}" ${d.weather.start == p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
+        <label class="inline"><input type="checkbox" data-k="wstrip" ${d.weather.strip ? "checked" : ""}> Status strip (temperature, city, time) under the radar</label>
       </fieldset>
       <fieldset><legend>Aircraft</legend>
         <div class="row"><div><label>View</label><select data-k="view">${S.views.map(v => `<option value="${v.id}" ${d.aircraft.view == v.id ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></div>
@@ -325,7 +326,7 @@ async function saveDevice() {                     // true when saved
     name: q("[data-k=name]").value,
     apps: [...c.querySelectorAll("[data-app]")].filter(x => x.checked).map(x => x.dataset.app),
     start_app: q("[data-k=start_app]").value,
-    weather: {places: [...c.querySelectorAll("[data-place]")].filter(x => x.checked).map(x => x.dataset.place), start: q("[data-k=wstart]").value},
+    weather: {places: [...c.querySelectorAll("[data-place]")].filter(x => x.checked).map(x => x.dataset.place), start: q("[data-k=wstart]").value, strip: q("[data-k=wstrip]").checked},
     aircraft: {view: q("[data-k=view]").value, start_level: +q("[data-k=level]").value},
     screen: Object.fromEntries([...c.querySelectorAll("[data-s]")].map(x => [x.dataset.s, x.value])),
   };

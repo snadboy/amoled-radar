@@ -89,7 +89,8 @@ def hello_reply(dev, apps):
     out = []
     for app_id in dev["apps"]:
         if app_id == "weather" and "weather" in by_id:
-            out.append({"id": "weather", "views": [by_id["weather"].view_summary(p, p["id"] == dev["weather"]["start"])
+            out.append({"id": "weather", "views": [dict(by_id["weather"].view_summary(p, p["id"] == dev["weather"]["start"]),
+                                                        strip=dev["weather"]["strip"])     # per view: the firmware's app API
                                                    for p in map(settings.place, dev["weather"]["places"]) if p]})
         elif app_id == "aircraft" and "aircraft" in by_id:
             v = settings.air_view(dev["aircraft"]["view"])

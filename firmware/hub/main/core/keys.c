@@ -26,7 +26,11 @@ static void task(void *arg)
                 if (v) { down_at[b] = now; longed[b] = false; }
                 else if (!longed[b]) post(b, KEY_SHORT);
             }
-            if (stable[b] && !longed[b] && now - down_at[b] >= KEYS_LONG_MS) { longed[b] = true; post(b, KEY_LONG); }
+            if (stable[b] && !longed[b] && now - down_at[b] >= KEYS_LONG_MS) {
+                longed[b] = true;
+                if (BOARD.one_button && b == BTN_KEY) post(BTN_BOOT, KEY_SHORT);   // one button: hold = next app
+                else post(b, KEY_LONG);
+            }
         }
         if (++tick % 10 == 0 && board_pwr_pressed()) post(BTN_PWR, KEY_SHORT);
         vTaskDelay(pdMS_TO_TICKS(10));

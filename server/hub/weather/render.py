@@ -107,13 +107,19 @@ class Geom:
     below. The default is the 2.16" AMOLED (480x480, 424 px of radar + 56 px strip);
     every other profile scales from it. Pixel orbit and dimmed chrome are AMOLED
     burn-in measures, so an LCD gets no orbit."""
-    def __init__(self, w=PANEL, h=PANEL, r=CORNER_R, panel="amoled"):
+    def __init__(self, w=PANEL, h=PANEL, r=CORNER_R, panel="amoled", strip=True):
         self.w, self.h, self.r, self.panel = int(w), int(h), int(r), panel
-        self.status_h = STATUS_H if (self.w, self.h) == (PANEL, PANEL) else max(48, int(self.h * STATUS_H / PANEL) & ~1)
+        # Round glass (r = half the panel, e.g. a 240x240 GC9A01): text is kept inside the
+        # circle instead of out of four corners, and the strip stacks its lines centred.
+        self.round = self.r * 2 >= min(self.w, self.h)
+        self.strip = bool(strip)
+        if not self.strip: self.status_h = 0            # radar only (a device setting)
+        elif self.round: self.status_h = 52
+        else: self.status_h = STATUS_H if (self.w, self.h) == (PANEL, PANEL) else max(48, int(self.h * STATUS_H / PANEL) & ~1)
         self.view_h = self.h - self.status_h
         self.orbit = ORBIT_PX if panel == "amoled" else 0
         self.side_inset = max(16, self.r * SIDE_INSET // CORNER_R) if self.r else 16
-        self.key = "%dx%d_r%d_%s" % (self.w, self.h, self.r, panel)
+        self.key = "%dx%d_r%d_%s%s" % (self.w, self.h, self.r, panel, "" if self.strip else "_nostrip")
 
 DEFAULT_GEOM = Geom()
 
@@ -260,6 +266,9 @@ def decorate(img, view=None, g=None):
     # ORBIT_PX on every side -- so keep the label 2*ORBIT_PX in from the edges or
     # some orbit positions cut it off ("50 m").
     # ...and clear of the rounded top-right corner of the glass.
+    if g.round:                                   # round glass: top centre is the only safe spot
+        d.text((cx, 2*g.orbit + 6), "50 mi", font=fnt(11), fill=(120, 134, 148, 150), anchor="ma")
+        return img
     inset = 22 if g.r else 8
     d.text((img.width - 2*g.orbit - inset, 2*g.orbit + (24 if g.r else 8)), "50 mi", font=fnt(13), fill=(120, 134, 148, 130), anchor="ra")
     return img
@@ -279,6 +288,8 @@ def status_strip(temp, hum, stamp, city=None, g=None):
     k = SH / float(STATUS_H)                       # font scale (1.0 on the default panel)
     f = lambda sz, bold=False: fnt(max(10, int(round(sz * k))), bold)
     img = Image.new("RGB", (W, SH), (0, 0, 0)); d = ImageDraw.Draw(img)
+    if g.round:
+        return _status_round(img, d, temp, hum, stamp, city, g)
     d.line([0, 0, W, 0], fill=(40, 46, 54), width=1)
     y = SH//2 + 1
     d.text((I, y), temp, font=f(36, True), fill=(255, 255, 255), anchor="lm")
@@ -292,6 +303,25 @@ def status_strip(temp, hum, stamp, city=None, g=None):
         d.text((W//2, y + int(11*k)), stamp, font=f(13), fill=(115, 128, 142), anchor="mm")
     else:
         d.text((W//2, y), stamp, font=f(17), fill=(115, 128, 142), anchor="mm")
+    return img
+
+def chord(g, y):
+    """Half-width of the round glass at panel row y."""
+    dy = abs(y - g.h / 2.0)
+    return math.sqrt(max(0.0, g.r * g.r - dy * dy))
+
+def _status_round(img, d, temp, hum, stamp, city, g):
+    """The strip at the bottom of a round panel: reading on one line, city and time
+    under it, both centred and shrunk until they fit the circle's chord."""
+    W, SH, top = g.w, g.status_h, g.h - g.status_h
+    def fit(text, y, sz, bold, room_y):
+        room = 2 * chord(g, top + room_y) - 8
+        while sz > 9 and d.textlength(text, font=fnt(sz, bold)) > room: sz -= 1
+        return fnt(sz, bold)
+    line1 = "%s\u00b0  %s%%" % (temp, hum)
+    d.text((W // 2, 15), line1, font=fit(line1, 15, 20, True, 26), fill=(255, 255, 255), anchor="mm")
+    line2 = "%s \u00b7 %s" % (city, stamp) if city else stamp
+    d.text((W // 2, 36), line2, font=fit(line2, 36, 12, False, 44), fill=(150, 160, 172), anchor="mm")
     return img
 
 def place_pixels(places, lat, lon, ow, oh, view=None, g=None):
@@ -330,6 +360,8 @@ def draw_places(frame, pts, crosshair=True, g=None):
     # orbit margin, so the visible panel starts at ORBIT_PX.
     def in_corner(px, py):
         vx, vy = px - g.orbit, py - g.orbit
+        if g.round:
+            return (vx - g.w / 2.0) ** 2 + (vy - g.h / 2.0) ** 2 > (g.r - 4) ** 2
         if not CR or vy >= CR: return False
         if vx < CR:          cx = CR
         elif vx > g.w - CR: cx = g.w - CR
@@ -359,7 +391,7 @@ def draw_places(frame, pts, crosshair=True, g=None):
                stroke_width=2, stroke_fill=(0, 0, 0, 255))
     return frame
 
-def progress_bar(frame, frac, left, right, ox=0, oy=0):
+def progress_bar(frame, frac, left, right, ox=0, oy=0, g=None):
     """Loop progress along the bottom of the radar view: start time on the left,
     latest time on the right, a fill and playhead for where this frame sits.
 
@@ -370,24 +402,64 @@ def progress_bar(frame, frac, left, right, ox=0, oy=0):
     W, H = frame.size
     d = ImageDraw.Draw(frame, "RGBA")
     # soft dark band so the labels stay legible over heavy returns
+    base = H - 13
+    if g is not None and g.round:                  # no lower than where the circle is ~190 px wide
+        base = min(base, int(g.h / 2 + math.sqrt(max(0, g.r * g.r - 96 * 96))))
     band = 34
     for k in range(band):
         a = int(170 * (k / float(band)) ** 1.6)
-        d.line([0, H - band + k, W, H - band + k], fill=(0, 0, 0, a))
+        yy = base + 13 - band + k
+        d.line([0, yy, W, yy], fill=(0, 0, 0, a if yy < base + 13 else 170))
+    if base + 13 < H:                              # round, no strip: keep it dark below the bar too
+        d.rectangle([0, base + 13, W, H], fill=(0, 0, 0, 170))
     jx, jy = ox // 2, oy // 2
-    y = H - 13 + jy
+    y = base + jy
     f = fnt(13)
-    d.text((12 + jx, y), left, font=f, fill=(150, 160, 172, 235), anchor="lm",
+    m = 12
+    if g is not None and g.round:                  # labels inside the circle at this row
+        f = fnt(11)
+        m = int(W / 2 - chord(g, y) + 8)
+    d.text((m + jx, y), left, font=f, fill=(150, 160, 172, 235), anchor="lm",
            stroke_width=2, stroke_fill=(0, 0, 0, 255))
-    d.text((W - 12 + jx, y), right, font=f, fill=(150, 160, 172, 235), anchor="rm",
+    d.text((W - m + jx, y), right, font=f, fill=(150, 160, 172, 235), anchor="rm",
            stroke_width=2, stroke_fill=(0, 0, 0, 255))
-    x0 = 12 + jx + d.textlength(left, font=f) + 14     # clear of the playhead dot
-    x1 = W - 12 + jx - d.textlength(right, font=f) - 14
+    x0 = m + jx + d.textlength(left, font=f) + 14     # clear of the playhead dot
+    x1 = W - m + jx - d.textlength(right, font=f) - 14
     d.rounded_rectangle([x0, y - 1.5, x1, y + 1.5], radius=1.5, fill=(58, 65, 75, 255))
     xf = x0 + (x1 - x0) * max(0.0, min(1.0, frac))
     d.rounded_rectangle([x0, y - 1.5, xf, y + 1.5], radius=1.5, fill=(214, 150, 20, 255))
     d.ellipse([xf - 4, y - 4, xf + 4, y + 4], fill=(240, 172, 30, 255))
     return frame
+
+# Panned views (the device's swipe): a pill in the top-left of every frame says how far
+# the view is off its city, and doubles as the device's "tap to recentre" target
+# (firmware: a tap in the top PAN_TAP_H px, left half, while panned).
+PAN_TAP_H = 80
+
+def offset_pill(frame, text, g=None):
+    """Burn "50 mi W  x" into a frame (the radar view, after the orbit crop)."""
+    g = g or DEFAULT_GEOM
+    d = ImageDraw.Draw(frame, "RGBA")
+    f = fnt(16, True)
+    label = "%s   \u2715" % text
+    w = d.textlength(label, font=f)
+    x0 = max(12, int(g.r * 0.6)); y0 = max(10, int(g.r * 0.35))
+    d.rounded_rectangle([x0, y0, x0 + w + 24, y0 + 30], radius=15, fill=(0, 0, 0, 175), outline=(255, 183, 3, 200), width=2)
+    d.text((x0 + 12, y0 + 15), label, font=f, fill=(255, 205, 90, 255), anchor="lm")
+    return frame
+
+def message_pill(text, g=None):
+    """A standalone pill ("Rendering 50 mi W...") the device draws over a dimmed frame.
+    Width a multiple of 4 and even height (the CO5300 wants even windows)."""
+    g = g or DEFAULT_GEOM
+    f = fnt(18, True)
+    w = int(ImageDraw.Draw(Image.new("RGB", (1, 1))).textlength(text, font=f)) + 44
+    w = min(g.w - 16, w + (-w) % 4)
+    img = Image.new("RGB", (w, 44), (0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, w - 1, 43], radius=21, fill=(16, 20, 24), outline=(255, 183, 3), width=2)
+    d.text((w // 2, 22), text, font=f, fill=(231, 235, 240), anchor="mm")
+    return img
 
 # ---------------------------------------------------------------------------
 # On-device UI, rendered here so the firmware needs no fonts. The device draws
@@ -406,27 +478,34 @@ def picker_panel(entries, hl, cur, g=None):
     n = len(entries)
     PW = min(PICKER_W, g.w - 32) & ~3
     RH, GAP = PICKER_ROW_H, 8
-    if 54 + n * (RH + GAP) + 30 > g.view_h - 8:          # short view (480x320): tighter rows
+    TOP, FOOT, small = 54, 30, g.w < 320
+    if small:                                            # 240x240: compact, inside the circle
+        PW, RH, GAP, TOP, FOOT = int(g.w * 0.74) & ~3, 26, 3, 30, 16
+    elif TOP + n * (RH + GAP) + FOOT > g.view_h - 8:     # short view (480x320): tighter rows
         RH, GAP = 38, 4
-    H = 54 + n * (RH + GAP) + 30
+    H = TOP + n * (RH + GAP) + FOOT
     H += (-H) % 4
     img = Image.new("RGB", (PW, H), (0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle([0, 0, PW - 1, H - 1], radius=11, outline=(58, 65, 75), width=2)
-    d.text((20, 30), "SHOW RADAR FOR", font=fnt(15, True), fill=(138, 149, 163), anchor="lm")
-    y = 50
+    d.text((PW // 2, 17) if small else (20, 30), "SHOW RADAR FOR", font=fnt(11 if small else 15, True),
+           fill=(138, 149, 163), anchor="mm" if small else "lm")
+    y = 26 if small else 50
+    nf, tf, inx = (fnt(15, True), fnt(13), 34) if small else (None, None, 52)
     for i, (cid, name, temp) in enumerate(entries):
         on = i == hl
         d.rounded_rectangle([16, y, PW - 17, y + RH], radius=8,
                             fill=(255, 183, 3) if on else (17, 19, 23))
         ink = (26, 18, 0) if on else (231, 235, 240)
         if cid == cur:
-            d.ellipse([30, y + RH / 2 - 5, 40, y + RH / 2 + 5], fill=(26, 18, 0) if on else (154, 164, 177))
-        d.text((52, y + RH / 2), name, font=fnt(25 if RH >= 48 else 21, True), fill=ink, anchor="lm")
+            ex = 20 if small else 30
+            d.ellipse([ex, y + RH / 2 - 4, ex + 8, y + RH / 2 + 4], fill=(26, 18, 0) if on else (154, 164, 177))
+        d.text((inx, y + RH / 2), name, font=nf or fnt(25 if RH >= 48 else 21, True), fill=ink, anchor="lm")
         if temp not in (None, "", "--"):
-            d.text((PW - 34, y + RH / 2), "%s\u00b0" % temp, font=fnt(21 if RH >= 48 else 18), fill=(61, 44, 0) if on else (154, 164, 177), anchor="rm")
+            d.text((PW - (24 if small else 34), y + RH / 2), "%s\u00b0" % temp, font=tf or fnt(21 if RH >= 48 else 18), fill=(61, 44, 0) if on else (154, 164, 177), anchor="rm")
         y += RH + GAP
-    d.text((20, H - 26), "KEY or tap: next   \u00b7   waits 3 s, then shows it", font=fnt(13), fill=(125, 135, 148), anchor="lm")
+    if not small:
+        d.text((20, H - 26), "KEY or tap: next   \u00b7   waits 3 s, then shows it", font=fnt(13), fill=(125, 135, 148), anchor="lm")
     return img
 
 def hold_pill():

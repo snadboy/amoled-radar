@@ -42,6 +42,10 @@ TWEEN_MODE = os.environ.get("RADAR_TWEEN_MODE", "motion")
 # Largest device-format loop a board's flash slot holds. Hub firmware: 6 slots, 2,068,480
 # bytes of data each (reported as "slot" in /device/hello); the radar firmware's were bigger.
 LOOP_BUDGET = int(os.environ.get("RADAR_LOOP_BUDGET", str(2060000)))
+
+def _budget(g):
+    # 4 MB boards (classic ESP32, 240x240) have 3 slots of 475,136 bytes (hello's "slot")
+    return LOOP_BUDGET if g.w * g.h > 240 * 240 else 470000
 # Clear-air echo (RainViewer's faint tan/grey band) is filtered on city views only
 # when the city is at least this warm. Snow can't reach the ground at 40 F, so the
 # band can't be snow then; below it, the band is kept in case it is light snow.
@@ -65,7 +69,7 @@ def _st(cid, g):
     return _state.setdefault((cid, g.key), {"loop_id": 0, "frames": [], "times": [], "keys": [], "status": b"",
                                             "built": 0, "status_built": 0, "radar_err": None, "status_err": None})
 
-def add_geom(w, h, r, panel):
+def add_geom(w, h, r, panel, strip=True):
     """Render loops for this profile from now on. Returns its Geom, or None if the
     profile is invalid or there are already MAX_GEOMS."""
     try:
@@ -74,7 +78,7 @@ def add_geom(w, h, r, panel):
         return None
     if not (100 <= w <= 2048 and 100 <= h <= 2048 and 0 <= r <= min(w, h) // 2 and panel in ("amoled", "lcd")):
         return None
-    g = R.Geom(w, h, r, panel)
+    g = R.Geom(w, h, r, panel, strip)
     with _lock:
         if g.key in _geoms: return _geoms[g.key]
         if len(_geoms) >= MAX_GEOMS: return None
@@ -151,7 +155,7 @@ def build_radar(city, maps, g):
         if layer is not None: frame.paste(layer, (0, 0), layer)
         R.draw_places(frame, pts, crosshair=not city.get("wide"), g=g)
         frame = frame.crop((O + ox, O + oy, O + ox + g.w, O + oy + g.view_h))
-        return R.progress_bar(frame, frac, left, right, ox, oy)
+        return R.progress_bar(frame, frac, left, right, ox, oy, g)
 
     # Interpolate the radar layer only, then composite. Fewer in-betweens if the
     # device-format loop would not fit the board's flash slot (a big storm changes
@@ -170,7 +174,7 @@ def build_radar(city, maps, g):
         span = float(t_last - t_first) or 1.0
         imgs = [compose(layer, (t - t_first) / span, left, right) for layer, t in zip(seq, times)]
         blob = R.encode_loop(compose(None, 0.0, left, right), imgs, keys)
-        if len(blob) <= LOOP_BUDGET or tw == 0:
+        if len(blob) <= _budget(g) or tw == 0:
             break
         print("[radar] %s %s loop %.1f MB with %d in-betweens > budget, trying fewer" % (city["id"], g.key, len(blob) / 1e6, tw), flush=True)
     out = [_jpeg(im) for im in imgs]
@@ -225,6 +229,7 @@ def status_loop():
         with _lock: geoms = list(_geoms.values())
         for c in _cities():
             for g in geoms:
+                if not g.strip: continue
                 try:
                     v = build_status(c, g)
                     with _lock: _st(c["id"], g).update(status=v, status_built=int(time.time()), status_err=None)
@@ -260,9 +265,9 @@ def health():
     ok = len(per) == len(ids) and all(v["frames"] and v["status"] for v in per.values())
     return ok, dict(per, profiles={k: "%d/%d cities ready" % (n, len(ids)) for k, n in others.items()})
 
-def preview_png(pid, w, h, r, panel):
+def preview_png(pid, w, h, r, panel, strip=True):
     """For the admin page: the latest frame and status strip of a city, at a profile."""
-    g = add_geom(w, h, r, panel)
+    g = add_geom(w, h, r, panel, strip)
     if g is None or not settings.place(pid): return None
     with _lock: st = dict(_st(pid, g))
     if not st["frames"]: return None
@@ -276,7 +281,7 @@ def _geom(h, q):
     response itself and returns None for a bad or unaccepted profile."""
     if "w" not in q:
         return R.DEFAULT_GEOM
-    g = add_geom(q.get("w"), q.get("h"), q.get("r", "0"), q.get("panel", "amoled"))
+    g = add_geom(q.get("w"), q.get("h"), q.get("r", "0"), q.get("panel", "amoled"), q.get("strip", "1") != "0")
     if g is None: h.json({"error": "bad profile, or too many profiles"}, 400)
     return g
 

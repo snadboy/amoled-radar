@@ -196,13 +196,19 @@ def device(dev_id):
     wp = [p for p in w.get("places", pl) if p in pl] or pl[:1]
     view = a.get("view") if a.get("view") in av else (av[0] if av else None)
     levels = (air_view(view) or {}).get("levels", [50])
+    pr = d.get("profile", {})
+    try: is_round = int(pr.get("r", 0)) * 2 >= min(int(pr.get("w", 480)), int(pr.get("h", 480)))
+    except ValueError: is_round = False
     return {
         "id": dev_id,
         "name": d.get("name") or "Display " + dev_id.replace(":", "")[-4:].upper(),
         "named": bool(d.get("name")),
         "apps": apps,
         "start_app": d.get("start_app") if d.get("start_app") in apps else apps[0],
-        "weather": {"places": wp, "start": w.get("start") if w.get("start") in wp else (wp[0] if wp else None)},
+        "weather": {"places": wp, "start": w.get("start") if w.get("start") in wp else (wp[0] if wp else None),
+                    # the strip under the radar (temperature, humidity, city, time); off by
+                    # default on round glass, where it would eat the bottom of the circle
+                    "strip": bool(w["strip"]) if "strip" in w else not is_round},
         "aircraft": {"view": view, "start_level": max(0, min(int(a.get("start_level", 0)), len(levels) - 1))},
         "screen": dict(default_screen(), **d.get("screen", {})),
         "profile": d.get("profile", {}),

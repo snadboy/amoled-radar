@@ -12,6 +12,7 @@ typedef struct {
     const char *panel;      // "amoled" | "lcd"
     bool psram;
     int band_rows;          // rows per DMA strip (board_band_buffer)
+    bool one_button;        // only KEY: a long press means BOOT short (next app)
 } board_profile_t;
 
 extern const board_profile_t BOARD;

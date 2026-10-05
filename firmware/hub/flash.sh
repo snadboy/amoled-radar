@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Flash over USB: BOARD=c6|p4 PORT=<resolved by-id path> ./flash.sh
+# Flash over USB: BOARD=c6|p4|esp32 PORT=<resolved by-id path> ./flash.sh
 # On sdevs the boards arrive through Proxmox USB passthrough (pve-faraday VM 121,
 # pinned by physical port -- see CLAUDE.md).
 set -euo pipefail
 cd "$(dirname "$0")"
 BOARD=${BOARD:-c6}
-case "$BOARD" in c6) CHIP=esp32c6 ;; p4) CHIP=esp32p4 ;; *) echo "BOARD must be c6 or p4" >&2; exit 1 ;; esac
+case "$BOARD" in c6) CHIP=esp32c6 ;; p4) CHIP=esp32p4 ;; esp32) CHIP=esp32 ;; *) echo "BOARD must be c6, p4 or esp32" >&2; exit 1 ;; esac
 # Always pass PORT resolved from the board's USB serial (/dev/serial/by-id/...): with
 # several boards on sdevs, a ttyACM number says nothing about which board it is.
 PORT=${PORT:?set PORT, e.g. PORT=\$(readlink -f /dev/serial/by-id/*<serial>*)}

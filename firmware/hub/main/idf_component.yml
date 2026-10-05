@@ -7,6 +7,11 @@ dependencies:
     version: "^1.0.0"
     rules:
       - if: "target == esp32c6"
+  # Classic ESP32 (DeskRadar build): round 240x240 GC9A01 SPI LCD
+  espressif/esp_lcd_gc9a01:
+    version: "^2"
+    rules:
+      - if: "target == esp32"
   # P4 board: SPI LCD driver, and WiFi through the on-board C6 (versions as Waveshare's
   # 04_wifistation example uses with IDF 5.5)
   espressif/esp_lcd_st7796:

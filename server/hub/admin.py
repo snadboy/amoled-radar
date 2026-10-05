@@ -166,7 +166,7 @@ def _preview(dev, apps):
         v = settings.air_view(dev["aircraft"]["view"])
         if not v: return None
         return by_id["aircraft"].preview_png(v, int(w), int(hgt), int(r), dev["aircraft"]["start_level"])
-    return by_id["weather"].preview_png(dev["weather"]["start"], w, hgt, r, panel)
+    return by_id["weather"].preview_png(dev["weather"]["start"], w, hgt, r, panel, dev["weather"]["strip"])
 
 def handle(h, method, p, q, body, apps):
     """Serve an admin path; False if it isn't one. Errors come back as {"error": ...}."""

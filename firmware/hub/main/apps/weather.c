@@ -159,6 +159,8 @@ static void sync_task(void *arg)
 static void draw_status(void)
 {
     char url[URL_MAX]; uint8_t *jpg; size_t len;
+    s_status_at = ms();
+    if (s_view_h >= BOARD.h) return;           // no strip: the loop fills the panel
     snprintf(url, sizeof(url), "%s/weather/%s/status.jpg?%s", hub_url(), s_views[s_cur].id, s_prof);
     if (net_get(url, &jpg, &len, MAX_JPEG) == ESP_OK) {
         if (running()) jpeg_draw(jpg, len, 0, s_view_h, 256);
@@ -292,7 +294,9 @@ static void app_init(const cJSON *views)
 {
     const cJSON *v;
     int def = 0;
+    bool strip = true;
     cJSON_ArrayForEach(v, views) {
+        if (cJSON_IsFalse(cJSON_GetObjectItem(v, "strip"))) strip = false;   // device setting, on every view
         const cJSON *id = cJSON_GetObjectItem(v, "id"), *nm = cJSON_GetObjectItem(v, "name");
         if (!cJSON_IsString(id) || s_nviews >= MAX_VIEWS) continue;
         strlcpy(s_views[s_nviews].id, id->valuestring, sizeof(s_views[0].id));
@@ -302,7 +306,8 @@ static void app_init(const cJSON *views)
     }
     if (!s_nviews) { strlcpy(s_views[0].id, "geneva", sizeof(s_views[0].id)); strlcpy(s_views[0].name, "Geneva", sizeof(s_views[0].name)); s_nviews = 1; }
     s_cur = def;
-    snprintf(s_prof, sizeof(s_prof), "w=%d&h=%d&r=%d&panel=%s", BOARD.w, BOARD.h, BOARD.corner_r, BOARD.panel);
+    snprintf(s_prof, sizeof(s_prof), "w=%d&h=%d&r=%d&panel=%s%s", BOARD.w, BOARD.h, BOARD.corner_r, BOARD.panel,
+             strip ? "" : "&strip=0");
     s_keys = xQueueCreate(8, sizeof(key_ev_t));
     xTaskCreate(draw_task, "weather", 6144, NULL, 5, &s_draw);
     xTaskCreate(sync_task, "wsync", 6144, NULL, 3, NULL);
