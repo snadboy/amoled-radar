@@ -21,7 +21,7 @@ Endpoints (the old amoled-radar paths stay as aliases until both boards migrate:
   /weather/ui/picker.jpg?hl=&cur=  city picker
   /weather/ui/hold.jpg             "Hold to turn off" pill
 """
-import io, json, os, threading, time, zlib
+import io, json, math, os, re, threading, time, zlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -55,6 +55,66 @@ CLEAR_AIR_MIN_F = float(os.environ.get("RADAR_CLEAR_AIR_MIN_F", "40"))
 # device shows are rendered (settings.places_in_use()).
 def _cities():
     return settings.places_in_use()
+
+# ---------------------------------------------------------------- panned views
+# A device can move its view off a city in 50-mile steps (swipe, or HA): the view id is
+# then "<city>@<dx>,<dy>" (east, north; at most PAN_MAX steps each way). Panned loops
+# are rendered on demand, only for the profiles that ask, and dropped PAN_KEEP_S after
+# the last request.
+PAN_MI, PAN_MAX, PAN_KEEP_S = 50, 3, 15 * 60
+_PAN_RE = re.compile(r"^([a-z0-9_-]+)@(-?\d+),(-?\d+)$")
+_pans = {}                             # (view id, profile key) -> last request time
+_pan_wake = threading.Event()
+_maps = None                           # the latest RainViewer index (radar_loop fetches it)
+
+def pan_label(dx, dy):
+    """"50 mi NE", "100 mi N, 50 mi E" """
+    ns = "N" if dy > 0 else "S"; ew = "E" if dx > 0 else "W"
+    if dx and dy and abs(dx) == abs(dy): return "%d mi %s%s" % (abs(dy) * PAN_MI, ns, ew)
+    parts = (["%d mi %s" % (abs(dy) * PAN_MI, ns)] if dy else []) + (["%d mi %s" % (abs(dx) * PAN_MI, ew)] if dx else [])
+    return ", ".join(parts)
+
+def parse_pan(vid):
+    """(city id, dx, dy); dx = dy = 0 for a plain city id; None if malformed or too far."""
+    m = _PAN_RE.match(vid or "")
+    if not m: return (vid, 0, 0)
+    cid, dx, dy = m.group(1), int(m.group(2)), int(m.group(3))
+    if abs(dx) > PAN_MAX or abs(dy) > PAN_MAX: return None
+    return (cid, dx, dy)
+
+def _place(vid):
+    """A city, or a panned view of one: the city moved by dx/dy steps, its own position
+    kept as a highlighted town so you can see where home is."""
+    p = parse_pan(vid)
+    if p is None: return None
+    cid, dx, dy = p
+    base = settings.place(cid)
+    if not base or (dx, dy) == (0, 0): return base
+    lat = base["lat"] + dy * PAN_MI / 69.05
+    lon = base["lon"] + dx * PAN_MI / (69.17 * math.cos(math.radians(base["lat"])))
+    towns = [t for t in base.get("places", []) if t[0] != base["name"]] + [[base["name"], base["lat"], base["lon"], True]]
+    return dict(base, id=vid, lat=lat, lon=lon, places=towns, home=base, pan=(dx, dy), pan_label=pan_label(dx, dy))
+
+def _touch_pan(vid, g):
+    """A device asked for a panned view: keep it rendered (start now if it is new)."""
+    with _lock:
+        new = (vid, g.key) not in _pans
+        _pans[(vid, g.key)] = time.time()
+    if new:
+        print("[weather] pan %s %s requested -- rendering it" % (vid, g.key), flush=True)
+        _pan_wake.set()
+
+def _active_pans():
+    """[(place, geom)] still wanted; forgets the rest (and their loops)."""
+    now, out = time.time(), []
+    with _lock:
+        for (vid, gk), t in list(_pans.items()):
+            if now - t > PAN_KEEP_S or gk not in _geoms:
+                del _pans[(vid, gk)]; _state.pop((vid, gk), None)
+                continue
+            p = _place(vid)
+            if p: out.append((p, _geoms[gk]))
+    return out
 
 # State per (city, profile). Loops are rendered for every profile in use: the default
 # panel always, plus any profile a device registers or asks for (MAX_GEOMS at most).
@@ -98,6 +158,7 @@ def _jpeg(img):
 
 def reading(city):
     """(temp F, humidity %) as strings: from HA entities or the nearest NWS station."""
+    city = city.get("home") or city              # a panned view reads its own city's weather
     t = city.get("temp") or {"source": "nws"}
     if t.get("source") == "ha":
         return R.ha_reading(t.get("temp"), t.get("hum"))
@@ -155,7 +216,9 @@ def build_radar(city, maps, g):
         if layer is not None: frame.paste(layer, (0, 0), layer)
         R.draw_places(frame, pts, crosshair=not city.get("wide"), g=g)
         frame = frame.crop((O + ox, O + oy, O + ox + g.w, O + oy + g.view_h))
-        return R.progress_bar(frame, frac, left, right, ox, oy, g)
+        frame = R.progress_bar(frame, frac, left, right, ox, oy, g)
+        if city.get("pan_label"): R.offset_pill(frame, city["pan_label"], g)   # also the device's recentre target
+        return frame
 
     # Interpolate the radar layer only, then composite. Fewer in-betweens if the
     # device-format loop would not fit the board's flash slot (a big storm changes
@@ -187,6 +250,8 @@ def build_status(city, g):
     temp, hum = reading(city)
     _temps[city["id"]] = temp
     stamp = clock(time.time(), city)
+    if city.get("pan_label"):            # panned: say how far off the city this is
+        stamp = "%s \u00b7 %s" % (city["pan_label"], stamp)
     if city.get("status_label"):          # whose reading this is, when it isn't the view's
         stamp = "%s \u00b7 %s" % (city["status_label"], stamp)
     return _jpeg(R.status_strip(temp, hum, stamp, city["name"], g))
@@ -201,6 +266,9 @@ def radar_loop():
             print("[radar] RainViewer index FAILED: %s" % e, flush=True)
         with _lock: geoms = list(_geoms.values())
         cities = _cities()
+        global _maps
+        if maps: _maps = maps
+        _pan_wake.set()                        # panned views refresh with the same index
         for g in geoms:
             for c in cities:
                 with _lock: st = _st(c["id"], g)
@@ -209,33 +277,49 @@ def radar_loop():
                 if maps is None:
                     with _lock: st["radar_err"] = "RainViewer index unavailable"
                     continue
-                try:
-                    frames, times, keys, info = build_radar(c, maps, g)
-                    with _lock:
-                        st.update(loop_id=int(time.time()), frames=frames, times=times,
-                                  keys=keys, clear_air_filtered=info["clear_air"],
-                                  blob=info["blob"], tweens_used=info["tweens"],
-                                  qc_masked="%d/%d" % (info["qc_masked"], info["real_frames"]),
-                                  built=int(time.time()), radar_err=None)
-                    print("[radar] %s %s ok (%d frames)" % (c["id"], g.key, len(frames)), flush=True)
-                except Exception as e:
-                    with _lock: st["radar_err"] = str(e)[:200]
-                    print("[radar] %s %s FAILED: %s" % (c["id"], g.key, e), flush=True)
+                _render(c, g, maps)
         only_new = _wake.wait(RADAR_S)
         _wake.clear()
+
+def _render(c, g, maps):
+    with _lock: st = _st(c["id"], g)
+    try:
+        frames, times, keys, info = build_radar(c, maps, g)
+        with _lock:
+            st.update(loop_id=int(time.time()), frames=frames, times=times, keys=keys,
+                      clear_air_filtered=info["clear_air"], blob=info["blob"], tweens_used=info["tweens"],
+                      qc_masked="%d/%d" % (info["qc_masked"], info["real_frames"]),
+                      built=int(time.time()), radar_err=None)
+        print("[radar] %s %s ok (%d frames)" % (c["id"], g.key, len(frames)), flush=True)
+    except Exception as e:
+        with _lock: st["radar_err"] = str(e)[:200]
+        print("[radar] %s %s FAILED: %s" % (c["id"], g.key, e), flush=True)
+
+def pan_loop():
+    """Panned views on their own thread, so a swipe waits for one loop (~15 s), not for
+    a whole pass over every city and profile."""
+    while True:
+        _pan_wake.wait(60); _pan_wake.clear()
+        for c, g in _active_pans():
+            with _lock: st = _st(c["id"], g); built = st["built"]
+            if time.time() - built < RADAR_S - 30: continue
+            maps = _maps
+            if maps is None or time.time() - built > RADAR_S * 2:
+                try: maps = json.loads(R.fetch("https://api.rainviewer.com/public/weather-maps.json"))
+                except Exception as e: print("[radar] RainViewer index FAILED: %s" % e, flush=True); continue
+            _render(c, g, maps)
 
 def status_loop():
     while True:
         with _lock: geoms = list(_geoms.values())
-        for c in _cities():
-            for g in geoms:
-                if not g.strip: continue
-                try:
-                    v = build_status(c, g)
-                    with _lock: _st(c["id"], g).update(status=v, status_built=int(time.time()), status_err=None)
-                except Exception as e:
-                    with _lock: _st(c["id"], g)["status_err"] = str(e)[:200]
-                    print("[status] %s %s FAILED: %s" % (c["id"], g.key, e), flush=True)
+        for c, g in [(c, g) for c in _cities() for g in geoms] + _active_pans():
+            if not g.strip: continue
+            try:
+                v = build_status(c, g)
+                with _lock: _st(c["id"], g).update(status=v, status_built=int(time.time()), status_err=None)
+            except Exception as e:
+                with _lock: _st(c["id"], g)["status_err"] = str(e)[:200]
+                print("[status] %s %s FAILED: %s" % (c["id"], g.key, e), flush=True)
         time.sleep(STATUS_S)
 
 def view_summary(place, default=False):
@@ -248,6 +332,7 @@ def start():
     _wake.clear()
     threading.Thread(target=radar_loop, daemon=True).start()
     threading.Thread(target=status_loop, daemon=True).start()
+    threading.Thread(target=pan_loop, daemon=True).start()
     print("[weather] cities in use=%s  (radar every %ds, status every %ds)"
           % (",".join(c["id"] for c in _cities()), RADAR_S, STATUS_S), flush=True)
 
@@ -268,7 +353,7 @@ def health():
 def preview_png(pid, w, h, r, panel, strip=True):
     """For the admin page: the latest frame and status strip of a city, at a profile."""
     g = add_geom(w, h, r, panel, strip)
-    if g is None or not settings.place(pid): return None
+    if g is None or not _place(pid): return None
     with _lock: st = dict(_st(pid, g))
     if not st["frames"]: return None
     img = R.Image.new("RGB", (g.w, g.h))
@@ -321,6 +406,10 @@ def _ui(h, name, q, g):
         entries = [(c["id"], c["name"], _temps.get(c["id"])) for c in cities if c]
         if not entries: return h.json({"error": "no cities"}, 404)
         return h.send(_jpeg(R.picker_panel(entries, hl % len(entries), q.get("cur", ""), g)), "image/jpeg")
+    if name == "pan.jpg":                 # shown while a panned loop is being rendered
+        p = parse_pan("x@" + q.get("pan", "0,0"))
+        text = "Loading %s\u2026" % pan_label(p[1], p[2]) if p and p[1:] != (0, 0) else "Loading\u2026"
+        return h.send(_jpeg(R.message_pill(text, g)), "image/jpeg")
     if name == "hold.jpg":
         return h.send(_jpeg(R.hold_pill()), "image/jpeg")
     return False
@@ -331,7 +420,7 @@ def handle(h, p, q):
     if p in ("/weather/views.json", "/cities.json"):
         return h.json([view_summary(c) for c in settings.places()])
     ui = (len(parts) == 4 and parts[1:3] == ["weather", "ui"]) or (len(parts) == 3 and parts[1] == "ui")
-    view = len(parts) >= 4 and parts[1] in ("weather", "c") and settings.place(parts[2]) is not None
+    view = len(parts) >= 4 and parts[1] in ("weather", "c") and _place(parts[2]) is not None
     if not (ui or view):
         return False
     g = _geom(h, q)                         # ?w=&h=&r=&panel= (none: the default panel)
@@ -340,5 +429,6 @@ def handle(h, p, q):
     if ui:
         return _ui(h, parts[-1], q, g)
     # /weather/<id>/... and legacy /c/<id>/...
+    if "@" in parts[2] and parse_pan(parts[2])[1:] != (0, 0): _touch_pan(parts[2], g)
     return _view(h, parts[2], "/".join(parts[3:]), g)
     return False

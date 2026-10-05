@@ -434,19 +434,21 @@ def progress_bar(frame, frac, left, right, ox=0, oy=0, g=None):
 
 # Panned views (the device's swipe): a pill in the top-left of every frame says how far
 # the view is off its city, and doubles as the device's "tap to recentre" target
-# (firmware: a tap in the top PAN_TAP_H px, left half, while panned).
+# (firmware: a tap in the top PAN_TAP_H px while panned).
 PAN_TAP_H = 80
 
 def offset_pill(frame, text, g=None):
     """Burn "50 mi W  x" into a frame (the radar view, after the orbit crop)."""
     g = g or DEFAULT_GEOM
     d = ImageDraw.Draw(frame, "RGBA")
-    f = fnt(16, True)
+    f = fnt(13 if g.round else 16, True)
     label = "%s   \u2715" % text
     w = d.textlength(label, font=f)
-    x0 = max(12, int(g.r * 0.6)); y0 = max(10, int(g.r * 0.35))
-    d.rounded_rectangle([x0, y0, x0 + w + 24, y0 + 30], radius=15, fill=(0, 0, 0, 175), outline=(255, 183, 3, 200), width=2)
-    d.text((x0 + 12, y0 + 15), label, font=f, fill=(255, 205, 90, 255), anchor="lm")
+    ph = 24 if g.round else 30
+    if g.round: x0, y0 = int(g.w / 2 - (w + 24) / 2), 24      # top centre, inside the circle
+    else: x0, y0 = max(12, int(g.r * 0.6)), max(10, int(g.r * 0.35))
+    d.rounded_rectangle([x0, y0, x0 + w + 24, y0 + ph], radius=ph // 2, fill=(0, 0, 0, 175), outline=(255, 183, 3, 200), width=2)
+    d.text((x0 + 12, y0 + ph // 2), label, font=f, fill=(255, 205, 90, 255), anchor="lm")
     return frame
 
 def message_pill(text, g=None):

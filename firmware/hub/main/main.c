@@ -54,7 +54,7 @@ static uint32_t s_sv;                // boot-settings version this boot started 
 static volatile int s_state_ms = STATE_MS;
 // A command from the hub (HA's App / City / Identify), picked up by the main loop.
 static SemaphoreHandle_t s_cmd_mx;
-static struct { bool pending, identify; char app[16], view[16]; } s_cmd;
+static struct { bool pending, identify; char app[16], view[24]; } s_cmd;   // view may be "<id>@<dx>,<dy>"
 static bool s_enabled[NAPPS];
 static int s_cur = -1;
 static bool s_on = true, s_manual_off, s_marked;
@@ -350,7 +350,7 @@ static void wifi_setup_screen(void)
 static void run_command(void)
 {
     xSemaphoreTake(s_cmd_mx, portMAX_DELAY);
-    char app[16], view[16]; bool ident = s_cmd.identify;
+    char app[16], view[24]; bool ident = s_cmd.identify;
     strlcpy(app, s_cmd.app, sizeof(app)); strlcpy(view, s_cmd.view, sizeof(view));
     s_cmd.pending = false;
     xSemaphoreGive(s_cmd_mx);

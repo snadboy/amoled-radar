@@ -1,6 +1,6 @@
 """Home Assistant over MQTT: discovery entities for the hub and every display.
 
-Per display (an HA device): Online, App + City selects (switch what it shows now --
+Per display (an HA device): Online, App + City + Pan selects (switch what it shows now --
 the boot defaults stay on the admin page), Screen select (Auto = room sensors,
 On / Off = forced; saved in its settings), Brightness, Firmware and IP sensors,
 Restart and Identify buttons. For the hub: aircraft in range and the closest one,
@@ -23,6 +23,16 @@ STATUS = BASE + "/status"
 ADMIN_URL = "https://displays.swallow-spectrum.ts.net"
 APP_LABEL = {"weather": "Weather radar", "aircraft": "Aircraft"}
 SCREEN = {"auto": "Auto", "on": "On", "off": "Off"}
+# Pan: the shown view moved one 50 mi step (the device's swipe); "<view>@<dx>,<dy>"
+PAN = {(0, 0): "Centred", (0, 1): "50 mi N", (1, 1): "50 mi NE", (1, 0): "50 mi E", (1, -1): "50 mi SE",
+       (0, -1): "50 mi S", (-1, -1): "50 mi SW", (-1, 0): "50 mi W", (-1, 1): "50 mi NW"}
+
+def _split_view(v):
+    """("geneva", dx, dy) from "geneva@1,0"."""
+    base, _, pan = (v or "").partition("@")
+    try: dx, dy = (int(n) for n in pan.split(",")) if pan else (0, 0)
+    except ValueError: dx, dy = 0, 0
+    return base, dx, dy
 
 _lock = threading.Lock()
 _client, _conf, _published = None, None, set()
@@ -61,6 +71,8 @@ def _configs():
             names = [p["name"] for p in map(settings.place, d["weather"]["places"]) if p]
             ent("select", node, "city", dev, "City", state_topic=st, value_template="{{ value_json.city }}",
                 command_topic="%s/%s/city/set" % (BASE, node), options=names, icon="mdi:weather-pouring")
+        ent("select", node, "pan", dev, "Pan", state_topic=st, value_template="{{ value_json.pan }}",
+            command_topic="%s/%s/pan/set" % (BASE, node), options=list(PAN.values()), icon="mdi:pan")
         ent("select", node, "screen", dev, "Screen", state_topic=st, value_template="{{ value_json.screen }}",
             command_topic="%s/%s/screen/set" % (BASE, node), options=list(SCREEN.values()), icon="mdi:monitor")
         ent("sensor", node, "brightness", dev, "Brightness", state_topic=st, value_template="{{ value_json.brightness }}",
@@ -100,9 +112,11 @@ def _publish_discovery(c):
 # ---------------------------------------------------------------- state
 def _device_state(d):
     s = core.seen(d["id"])
-    place = settings.place(s.get("view", "")) if s.get("app") == "weather" else None
+    base, dx, dy = _split_view(s.get("view", ""))
+    place = settings.place(base) if s.get("app") == "weather" else None
     return {"online": core.online(d["id"]), "app": APP_LABEL.get(s.get("app"), ""),
-            "city": place["name"] if place else "", "screen": SCREEN.get(d["screen"].get("mode", "auto"), "Auto"),
+            "city": place["name"] if place else "",
+            "pan": PAN.get((dx, dy), "%d mi E, %d mi N" % (dx * 50, dy * 50)), "screen": SCREEN.get(d["screen"].get("mode", "auto"), "Auto"),
             "brightness": s.get("bright"), "fw": d["profile"].get("fw", ""), "ip": s.get("ip", ""),
             "screen_on": bool(s.get("on"))}
 
@@ -149,6 +163,12 @@ def _on_message(c, userdata, msg):
         elif what == "city":
             place = next((p for p in map(settings.place, dev["weather"]["places"]) if p and p["name"] == val), None)
             if place: core.command(dev["id"], app="weather", view=place["id"])
+        elif what == "pan":
+            pan = next((k for k, l in PAN.items() if l == val), None)
+            s = core.seen(dev["id"])
+            base = _split_view(s.get("view", ""))[0]
+            if pan is not None and base and s.get("app") in dev["apps"]:
+                core.command(dev["id"], app=s["app"], view=base if pan == (0, 0) else "%s@%d,%d" % ((base,) + pan))
         elif what == "screen":
             mode = next((k for k, l in SCREEN.items() if l == val), None)
             if mode:
