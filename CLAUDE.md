@@ -35,7 +35,22 @@ One server for every small display: weather radar today, aircraft next (ported f
 - opensky-amoled archived 2026-10-04: private, read-only https://github.com/snadboy/opensky-amoled
   (local copy still at ~/projects/git/opensky-amoled). Old amoled-radar images removed from sdevs
   and bedrock.
-- **Next:** step 5 (device profiles, then a bigger screen).
+- **Step 5 IN PROGRESS (2026-10-04):** target board = Waveshare **ESP32-P4-WIFI6-Touch-LCD-3.5**
+  (arrives 2026-10-05): ST7796 SPI LCD 320x480 (MOSI 20, CLK 21, CS 23, DC 26, RST 27, backlight
+  PWM 28), FT6336 touch I2C (RST 29, INT 50), I2C SCL 8 / SDA 7, AXP2101, buttons BOOT/PWR/RESET
+  only (no KEY), 32 MB PSRAM, WiFi via the C6 co-processor over SDIO (esp_wifi_remote/esp-hosted),
+  separate sdkconfig for chip rev <3 vs 3.x. Waveshare BSP: waveshare/esp32_p4_wifi6_touch_lcd_3_5
+  2.0.2 (pins/init cmds there). Planned orientation: landscape 480x320 (not confirmed by owner).
+  Done: weather server renders per profile (`render.Geom`; default 480x480 byte-identical;
+  480x320 = 272 px radar + 48 px strip, no orbit on LCD), loops for registered/requested
+  profiles (MAX_GEOMS 4), `?w=&h=&r=&panel=` on weather paths; firmware weather app takes the
+  loop height from RDL1 (store v6), sends its profile, tap opens/steps the picker.
+  Fixed: store claimed only one "writing" slot (two sync tasks -> a slot erased mid-download,
+  headers ANDed together); net_stream shared one static buffer between both tasks.
+  OPEN: on Display 2 downloads took 15-58 s (was 1.5 s) -- both slow runs had the screen off
+  (room empty); not explained yet. Display 2 currently runs a test build pointed at a test hub
+  on sdevs :8099 (container hub-test, cache in the session scratchpad) -- move it back to bedrock
+  when done. Not started: boards/ws_p4_35.c + esp32p4 build.
 - Builds: `./build.sh` (bedrock, the default) or `HUB_SERVER_URL=http://192.168.86.220:8098
   ./build.sh` (dev). Flash by SERIAL, never by ttyACM number (both boards are on sdevs):
   `PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.

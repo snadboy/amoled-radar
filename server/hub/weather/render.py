@@ -46,7 +46,7 @@ def deg2px(lat, lon, z, tile=256):
     y = (1.0 - math.log(math.tan(lr) + 1 / math.cos(lr)) / math.pi) / 2.0 * n * tile
     return x, y
 
-def window(z, tile, lat=None, lon=None, view=None):
+def window(z, tile, lat=None, lon=None, view=None, g=None):
     """Pixel box at (z, tile) for the view's geographic window.
 
     Two modes, set per view:
@@ -54,16 +54,16 @@ def window(z, tile, lat=None, lon=None, view=None):
         it is visible in every direction.
       * lon_span (wide regional views): the span of longitude fills the panel WIDTH.
     """
-    view = view or {}
+    view = view or {}; g = g or DEFAULT_GEOM
     lat = LAT if lat is None else lat; lon = LON if lon is None else lon
     if view.get("lon_span"):
         half_w = view["lon_span"] / 2.0 / 360.0 * (2 ** z) * tile
-        half_h = half_w * (VIEW_H / float(PANEL))
+        half_h = half_w * (g.view_h / float(g.w))
     else:
         span_m = view.get("radius_mi", RADIUS_MI) * 2 * 1609.344
         half_h = span_m / mpp(lat, z, tile) / 2.0
-        half_w = half_h * (PANEL / VIEW_H)
-    bleed  = (ORBIT_PX + 2) / float(VIEW_H) * (half_h * 2)   # keep the orbit in-bounds
+        half_w = half_h * (g.w / float(g.view_h))
+    bleed  = (g.orbit + 2) / float(g.view_h) * (half_h * 2)   # keep the orbit in-bounds
     half_h += bleed; half_w += bleed
     cx, cy = deg2px(lat, lon, z, tile)
     return cx - half_w, cy - half_h, cx + half_w, cy + half_h
@@ -72,12 +72,12 @@ def fetch(url, timeout=25):
     return urllib.request.urlopen(
         urllib.request.Request(url, headers={"User-Agent": UA}), timeout=timeout).read()
 
-def mosaic(url_for, z, tile, cache_key=None, lat=None, lon=None, view=None):
+def mosaic(url_for, z, tile, cache_key=None, lat=None, lon=None, view=None, g=None):
     if cache_key:
         p = os.path.join(CACHE, cache_key)
         if os.path.exists(p):
             return Image.open(p).convert("RGBA")
-    x0, y0, x1, y1 = window(z, tile, lat, lon, view)
+    x0, y0, x1, y1 = window(z, tile, lat, lon, view, g)
     tx0, ty0, tx1, ty1 = int(x0//tile), int(y0//tile), int(x1//tile), int(y1//tile)
     canvas = Image.new("RGBA", ((tx1-tx0+1)*tile, (ty1-ty0+1)*tile), (0, 0, 0, 0))
     for tx in range(tx0, tx1+1):
@@ -102,11 +102,27 @@ ORBIT_STEPS = int(os.environ.get("RADAR_ORBIT_STEPS", "24"))  # positions per cy
 RING_ALPHA  = int(os.environ.get("RADAR_RING_ALPHA", "55"))   # was 85
 CROSS_ALPHA = int(os.environ.get("RADAR_CROSS_ALPHA", "110")) # was 190
 
-def orbit_offset(seq):
+class Geom:
+    """Panel layout for one device profile: the radar view on top, the status strip
+    below. The default is the 2.16" AMOLED (480x480, 424 px of radar + 56 px strip);
+    every other profile scales from it. Pixel orbit and dimmed chrome are AMOLED
+    burn-in measures, so an LCD gets no orbit."""
+    def __init__(self, w=PANEL, h=PANEL, r=CORNER_R, panel="amoled"):
+        self.w, self.h, self.r, self.panel = int(w), int(h), int(r), panel
+        self.status_h = STATUS_H if (self.w, self.h) == (PANEL, PANEL) else max(48, int(self.h * STATUS_H / PANEL) & ~1)
+        self.view_h = self.h - self.status_h
+        self.orbit = ORBIT_PX if panel == "amoled" else 0
+        self.side_inset = max(16, self.r * SIDE_INSET // CORNER_R) if self.r else 16
+        self.key = "%dx%d_r%d_%s" % (self.w, self.h, self.r, panel)
+
+DEFAULT_GEOM = Geom()
+
+def orbit_offset(seq, g=None):
     """Walk a slow Lissajous-ish path so no static edge sits on one pixel."""
     import math as _m
+    px = (g or DEFAULT_GEOM).orbit
     a = 2.0 * _m.pi * (seq % ORBIT_STEPS) / ORBIT_STEPS
-    return int(round(ORBIT_PX * _m.sin(a))), int(round(ORBIT_PX * _m.sin(2 * a) / 2.0))
+    return int(round(px * _m.sin(a))), int(round(px * _m.sin(2 * a) / 2.0))
 
 DARK_GAMMA = float(os.environ.get("RADAR_DARK_GAMMA", "1.7"))
 DARK_SCALE = float(os.environ.get("RADAR_DARK_SCALE", "0.72"))
@@ -120,8 +136,8 @@ def darken_for_amoled(img):
     r, g, b, a = img.split()
     return Image.merge("RGBA", (r.point(lut), g.point(lut), b.point(lut), a))
 
-def basemap(lat=None, lon=None, view=None):
-    view = view or {}
+def basemap(lat=None, lon=None, view=None, g=None):
+    view = view or {}; g = g or DEFAULT_GEOM
     lat = LAT if lat is None else lat; lon = LON if lon is None else lon
     z = view.get("base_zoom", BASE_ZOOM)
     span = "s%g" % view["lon_span"] if view.get("lon_span") else "r%g" % view.get("radius_mi", RADIUS_MI)
@@ -129,15 +145,17 @@ def basemap(lat=None, lon=None, view=None):
            "Canvas/World_Dark_Gray_Base/MapServer/tile/%d/%d/%d")   # NOTE: z/y/x
     # The cache key MUST include the location. It used to be just "base_z9.png",
     # which every city would have silently shared.
+    # ...and the window's shape: other profiles get their own (the default keeps the old key).
+    shape = "" if g.key == DEFAULT_GEOM.key else "_%dx%d" % (g.w, g.view_h)
     return mosaic(lambda x, y: url % (z, y, x), z, 256,
-                  cache_key="base_z%d_%.4f_%.4f_%s_o%d.png" % (z, lat, lon, span, ORBIT_PX),
-                  lat=lat, lon=lon, view=view)
+                  cache_key="base_z%d_%.4f_%.4f_%s_o%d%s.png" % (z, lat, lon, span, g.orbit, shape),
+                  lat=lat, lon=lon, view=view, g=g)
 
-def radar(host, path, lat=None, lon=None, view=None):
+def radar(host, path, lat=None, lon=None, view=None, g=None):
     view = view or {}
     z, tile = view.get("radar_zoom", RADAR_ZOOM), view.get("radar_tile", RADAR_TILE)
     url = "%s%s/%d/%d/%%d/%%d/%d/1_1.png" % (host, path, tile, z, PALETTE)
-    return mosaic(lambda x, y: url % (x, y), z, tile, lat=lat, lon=lon, view=view)
+    return mosaic(lambda x, y: url % (x, y), z, tile, lat=lat, lon=lon, view=view, g=g)
 
 def suppress_clear_air(img):
     """Drop RainViewer's lowest band: semi-transparent tans and greys, from about
@@ -183,7 +201,7 @@ def qc_times():
     return [(datetime.strptime(t.strip()[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp(), t.strip())
             for t in raw if t.strip()]
 
-def qc_mask(lat, lon, view, when, available, ow, oh):
+def qc_mask(lat, lon, view, when, available, ow, oh, g=None):
     """Boolean mask (oh x ow) of where NOAA's QC'd mosaic has echo nearest to
     `when`, dilated by QC_DILATE_KM, over exactly the frame's oversized window.
     Returns None if no NOAA frame is close enough in time."""
@@ -194,7 +212,7 @@ def qc_mask(lat, lon, view, when, available, ow, oh):
     if abs(t_epoch - when) > QC_MAX_SKEW_S:
         return None
     z = (view or {}).get("base_zoom", BASE_ZOOM)
-    x0, y0, x1, y1 = window(z, 256, lat, lon, view)
+    x0, y0, x1, y1 = window(z, 256, lat, lon, view, g)
     world = (2 ** z) * 256.0; C = 2 * math.pi * 6378137.0
     mx0, mx1 = (x0 / world - 0.5) * C, (x1 / world - 0.5) * C
     my0, my1 = (0.5 - y1 / world) * C, (0.5 - y0 / world) * C       # EPSG:3857 metres
@@ -221,8 +239,8 @@ def is_watermark(img):
     d = {col: n for n, col in c}
     return d.get((0, 0, 0, 140), 0) > 2000 and d.get((255, 255, 255, 200), 0) > 200
 
-def decorate(img, view=None):
-    view = view or {}
+def decorate(img, view=None, g=None):
+    view = view or {}; g = g or DEFAULT_GEOM
     if view.get("wide"):
         return img          # rings and a crosshair mean nothing on a regional view
     d = ImageDraw.Draw(img, "RGBA")
@@ -231,7 +249,7 @@ def decorate(img, view=None):
     # than the radius. Scaling rings from img.height alone drew the "50 mi" ring
     # ~4% too big (about 52 mi).
     radius = view.get("radius_mi", RADIUS_MI)
-    bleed_frac = 2.0 * (ORBIT_PX + 2) / float(VIEW_H)
+    bleed_frac = 2.0 * (g.orbit + 2) / float(g.view_h)
     px_per_mi = (img.height / 2.0) / (radius * (1 + bleed_frac))
     for mi in (25, 50):
         r = mi*px_per_mi
@@ -242,7 +260,8 @@ def decorate(img, view=None):
     # ORBIT_PX on every side -- so keep the label 2*ORBIT_PX in from the edges or
     # some orbit positions cut it off ("50 m").
     # ...and clear of the rounded top-right corner of the glass.
-    d.text((img.width - 2*ORBIT_PX - 22, 2*ORBIT_PX + 24), "50 mi", font=fnt(13), fill=(120, 134, 148, 130), anchor="ra")
+    inset = 22 if g.r else 8
+    d.text((img.width - 2*g.orbit - inset, 2*g.orbit + (24 if g.r else 8)), "50 mi", font=fnt(13), fill=(120, 134, 148, 130), anchor="ra")
     return img
 
 _fc = {}
@@ -254,61 +273,68 @@ def fnt(sz, bold=False):
         except Exception: _fc[k] = ImageFont.load_default()
     return _fc[k]
 
-def status_strip(temp, hum, stamp, city=None):
-    img = Image.new("RGB", (PANEL, STATUS_H), (0, 0, 0)); d = ImageDraw.Draw(img)
-    d.line([0, 0, PANEL, 0], fill=(40, 46, 54), width=1)
-    y = STATUS_H//2 + 1
-    d.text((SIDE_INSET, y), temp, font=fnt(36, True), fill=(255, 255, 255), anchor="lm")
-    w = d.textlength(temp, font=fnt(36, True))
-    d.text((SIDE_INSET+w+5, y+3), "°F", font=fnt(20), fill=(145, 156, 168), anchor="lm")
-    d.text((PANEL-SIDE_INSET, y+3), "%", font=fnt(20), fill=(145, 156, 168), anchor="rm")
-    pw = d.textlength("%", font=fnt(20))
-    d.text((PANEL-SIDE_INSET-pw-5, y), hum, font=fnt(36, True), fill=(255, 255, 255), anchor="rm")
+def status_strip(temp, hum, stamp, city=None, g=None):
+    g = g or DEFAULT_GEOM
+    W, SH, I = g.w, g.status_h, g.side_inset
+    k = SH / float(STATUS_H)                       # font scale (1.0 on the default panel)
+    f = lambda sz, bold=False: fnt(max(10, int(round(sz * k))), bold)
+    img = Image.new("RGB", (W, SH), (0, 0, 0)); d = ImageDraw.Draw(img)
+    d.line([0, 0, W, 0], fill=(40, 46, 54), width=1)
+    y = SH//2 + 1
+    d.text((I, y), temp, font=f(36, True), fill=(255, 255, 255), anchor="lm")
+    w = d.textlength(temp, font=f(36, True))
+    d.text((I+w+5, y+3), "°F", font=f(20), fill=(145, 156, 168), anchor="lm")
+    d.text((W-I, y+3), "%", font=f(20), fill=(145, 156, 168), anchor="rm")
+    pw = d.textlength("%", font=f(20))
+    d.text((W-I-pw-5, y), hum, font=f(36, True), fill=(255, 255, 255), anchor="rm")
     if city:
-        d.text((PANEL//2, y - 9), city, font=fnt(17, True), fill=(196, 204, 214), anchor="mm")
-        d.text((PANEL//2, y + 11), stamp, font=fnt(13), fill=(115, 128, 142), anchor="mm")
+        d.text((W//2, y - int(9*k)), city, font=f(17, True), fill=(196, 204, 214), anchor="mm")
+        d.text((W//2, y + int(11*k)), stamp, font=f(13), fill=(115, 128, 142), anchor="mm")
     else:
-        d.text((PANEL//2, y), stamp, font=fnt(17), fill=(115, 128, 142), anchor="mm")
+        d.text((W//2, y), stamp, font=f(17), fill=(115, 128, 142), anchor="mm")
     return img
 
-def place_pixels(places, lat, lon, ow, oh, view=None):
+def place_pixels(places, lat, lon, ow, oh, view=None, g=None):
     """Pixel position of each town on the OVERSIZED frame (ow x oh), which covers
     exactly window() at any zoom. Towns the orbit could push off-screen are dropped."""
+    g = g or DEFAULT_GEOM
     z = (view or {}).get("base_zoom", BASE_ZOOM)
-    x0, y0, x1, y1 = window(z, 256, lat, lon, view)
+    x0, y0, x1, y1 = window(z, 256, lat, lon, view, g)
     out = []
     for place in places:
         name, pla, plo = place[0], place[1], place[2]
         px, py = deg2px(pla, plo, z, 256)
         x = (px - x0) / (x1 - x0) * ow; y = (py - y0) / (y1 - y0) * oh
-        m = 2 * ORBIT_PX + 4
+        m = 2 * g.orbit + 4
         if m < x < ow - m and m < y < oh - m:
             out.append((name, x, y, bool(place[3]) if len(place) > 3 else False))
     return out
 
-def draw_places(frame, pts, crosshair=True):
+def draw_places(frame, pts, crosshair=True, g=None):
     """Town markers on TOP of the radar, so they stay readable in the storms where
     the context matters. Drawn before the orbit crop, so they drift with it.
 
     Each label goes right of its dot unless that would hit the centre crosshair,
     another label, or the edge -- then it flips left. (Canton's "Ann Arbor" ran
     straight into the crosshair before this.)"""
+    g = g or DEFAULT_GEOM
     d = ImageDraw.Draw(frame, "RGBA")
     f = fnt(14)
     cx, cy = frame.width / 2.0, frame.height / 2.0
     keep_out = [(cx - 14, cy - 14, cx + 14, cy + 14)] if crosshair else []
     keep_out += [(x - 5, y - 5, x + 5, y + 5) for _, x, y, _ in pts]   # every dot
-    edge = 2 * ORBIT_PX + 4
+    edge = 2 * g.orbit + 4
+    CR = g.r
     # The radar view is the panel's TOP 424 px, so only its two top corners are
     # rounded (the strip below takes the bottom ones). Frame coords include the
     # orbit margin, so the visible panel starts at ORBIT_PX.
     def in_corner(px, py):
-        vx, vy = px - ORBIT_PX, py - ORBIT_PX
-        if vy >= CORNER_R: return False
-        if vx < CORNER_R:          cx = CORNER_R
-        elif vx > PANEL - CORNER_R: cx = PANEL - CORNER_R
+        vx, vy = px - g.orbit, py - g.orbit
+        if not CR or vy >= CR: return False
+        if vx < CR:          cx = CR
+        elif vx > g.w - CR: cx = g.w - CR
         else: return False
-        return (vx - cx) ** 2 + (vy - CORNER_R) ** 2 > (CORNER_R - 4) ** 2
+        return (vx - cx) ** 2 + (vy - CR) ** 2 > (CR - 4) ** 2
     def hard(box):      # off the panel or inside a rounded corner: never acceptable
         if box[0] < edge or box[2] > frame.width - edge: return True
         return any(in_corner(x, y) for x in (box[0], box[2]) for y in (box[1], box[3]))
@@ -372,30 +398,35 @@ PICKER_W     = 392                     # drawn at x = (480 - 392) / 2 = 44
 PICKER_ROW_H = 52
 HOLD_W, HOLD_H = 240, 40               # drawn at x = 120, y = 380 (below the picker, above the strip)
 
-def picker_panel(entries, hl, cur):
+def picker_panel(entries, hl, cur, g=None):
     """entries: [(id, name, temp)]. Height is a multiple of 4 so the device can
     centre it on even coordinates (the CO5300 wants even windows). The bottom 22 px
     are left for the countdown bar the device animates."""
+    g = g or DEFAULT_GEOM
     n = len(entries)
-    H = 54 + n * (PICKER_ROW_H + 8) + 30
+    PW = min(PICKER_W, g.w - 32) & ~3
+    RH, GAP = PICKER_ROW_H, 8
+    if 54 + n * (RH + GAP) + 30 > g.view_h - 8:          # short view (480x320): tighter rows
+        RH, GAP = 38, 4
+    H = 54 + n * (RH + GAP) + 30
     H += (-H) % 4
-    img = Image.new("RGB", (PICKER_W, H), (0, 0, 0))
+    img = Image.new("RGB", (PW, H), (0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([0, 0, PICKER_W - 1, H - 1], radius=11, outline=(58, 65, 75), width=2)
+    d.rounded_rectangle([0, 0, PW - 1, H - 1], radius=11, outline=(58, 65, 75), width=2)
     d.text((20, 30), "SHOW RADAR FOR", font=fnt(15, True), fill=(138, 149, 163), anchor="lm")
     y = 50
     for i, (cid, name, temp) in enumerate(entries):
         on = i == hl
-        d.rounded_rectangle([16, y, PICKER_W - 17, y + PICKER_ROW_H], radius=8,
+        d.rounded_rectangle([16, y, PW - 17, y + RH], radius=8,
                             fill=(255, 183, 3) if on else (17, 19, 23))
         ink = (26, 18, 0) if on else (231, 235, 240)
         if cid == cur:
-            d.ellipse([30, y + PICKER_ROW_H / 2 - 5, 40, y + PICKER_ROW_H / 2 + 5], fill=(26, 18, 0) if on else (154, 164, 177))
-        d.text((52, y + PICKER_ROW_H / 2), name, font=fnt(25, True), fill=ink, anchor="lm")
+            d.ellipse([30, y + RH / 2 - 5, 40, y + RH / 2 + 5], fill=(26, 18, 0) if on else (154, 164, 177))
+        d.text((52, y + RH / 2), name, font=fnt(25 if RH >= 48 else 21, True), fill=ink, anchor="lm")
         if temp not in (None, "", "--"):
-            d.text((PICKER_W - 34, y + PICKER_ROW_H / 2), "%s\u00b0" % temp, font=fnt(21), fill=(61, 44, 0) if on else (154, 164, 177), anchor="rm")
-        y += PICKER_ROW_H + 8
-    d.text((20, H - 26), "KEY: next   \u00b7   hold KEY: screen off", font=fnt(13), fill=(125, 135, 148), anchor="lm")
+            d.text((PW - 34, y + RH / 2), "%s\u00b0" % temp, font=fnt(21 if RH >= 48 else 18), fill=(61, 44, 0) if on else (154, 164, 177), anchor="rm")
+        y += RH + GAP
+    d.text((20, H - 26), "KEY or tap: next   \u00b7   waits 3 s, then shows it", font=fnt(13), fill=(125, 135, 148), anchor="lm")
     return img
 
 def hold_pill():

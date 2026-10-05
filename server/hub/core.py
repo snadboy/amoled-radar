@@ -49,6 +49,11 @@ def _seen(dev_id, ip, profile=None):
             d["profile"] = profile
             _save()
 
+def profiles():
+    """Display profiles of the registered devices (as reported in /device/hello)."""
+    with _lock:
+        return [dict(d["profile"]) for d in _devices.values() if d.get("profile")]
+
 def device_name(dev_id):
     """Its given name, else 'Display' + the last 4 hex digits of its MAC."""
     with _lock: name = _devices.get(dev_id, {}).get("name")

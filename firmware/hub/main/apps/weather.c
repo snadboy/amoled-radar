@@ -2,7 +2,10 @@
 //
 // draw task : while active and the screen is on, animates the current view's RDL1
 //             loop from flash (rdl.c) and the 60 s status strip below it.
-//             KEY short -> picker (KEY = next view, 3 s idle = choose).
+//             KEY short or a tap -> picker (KEY / tap = next view, 3 s idle = choose).
+//
+// Everything is sized by the hub for this board's profile (?w=&h=&r=&panel=): the
+// radar view's height comes from the loop itself, the strip sits below it.
 // sync task : keeps every view's loop in flash, active or not (current view every
 //             60 s, the others every 2 h), so switching cities -- and apps -- is instant.
 //
@@ -31,9 +34,6 @@ static const char *TAG = "weather";
 #define URL_MAX       256
 #define MAX_VIEWS     8
 #define MAX_JPEG      (160 * 1024)
-#define VIEW_H        424
-#define STATUS_Y      424
-#define PICK_X        44
 #define CHECK_CUR_MS  (60 * 1000)
 #define CHECK_BG_MS   (2 * 60 * 60 * 1000)
 #define STATUS_MS     (60 * 1000)
@@ -57,7 +57,20 @@ static loop_hdr_t s_shown;
 static QueueHandle_t s_keys;
 static TaskHandle_t s_draw;
 
+static int s_view_h = 424;                // the loop's height; the status strip starts here
+static char s_prof[64];                   // ?w=&h=&r=&panel= for this board
+static bool s_touched;
+
 static int64_t ms(void) { return esp_timer_get_time() / 1000; }
+
+// A new touch (finger down), not a held one.
+static bool tapped(void)
+{
+    int x, y;
+    bool now = board_touch(&x, &y), tap = now && !s_touched;
+    s_touched = now;
+    return tap;
+}
 static bool running(void) { return s_active && s_screen_on; }
 
 static void key_of(int vi, char out[16]) { snprintf(out, 16, "w:%s", s_views[vi].id); }
@@ -75,7 +88,7 @@ static esp_err_t to_flash(void *ctx, const uint8_t *d, size_t n)
 static bool manifest(int vi, uint32_t *loop_id, size_t *size)
 {
     char url[URL_MAX]; uint8_t *js; size_t len;
-    snprintf(url, sizeof(url), "%s/weather/%s/manifest.json", hub_url(), s_views[vi].id);
+    snprintf(url, sizeof(url), "%s/weather/%s/manifest.json?%s", hub_url(), s_views[vi].id, s_prof);
     if (net_get(url, &js, &len, 64 * 1024) != ESP_OK) return false;
     cJSON *m = cJSON_Parse((char *)js);
     free(js);
@@ -101,7 +114,7 @@ static void sync_view(int vi)
     char url[URL_MAX]; size_t got;
     sink_t sk = { .slot = slot, .off = STORE_DATA_OFF };
     int64_t t0 = ms();
-    snprintf(url, sizeof(url), "%s/weather/%s/loop.bin", hub_url(), s_views[vi].id);
+    snprintf(url, sizeof(url), "%s/weather/%s/loop.bin?%s", hub_url(), s_views[vi].id, s_prof);
     if (net_stream(url, to_flash, &sk, &got) != ESP_OK) { ESP_LOGW(TAG, "%s loop download failed; retry later", key); return; }
     loop_hdr_t h = {0};
     strlcpy(h.view, key, sizeof(h.view));
@@ -134,9 +147,9 @@ static void sync_task(void *arg)
 static void draw_status(void)
 {
     char url[URL_MAX]; uint8_t *jpg; size_t len;
-    snprintf(url, sizeof(url), "%s/weather/%s/status.jpg", hub_url(), s_views[s_cur].id);
+    snprintf(url, sizeof(url), "%s/weather/%s/status.jpg?%s", hub_url(), s_views[s_cur].id, s_prof);
     if (net_get(url, &jpg, &len, MAX_JPEG) == ESP_OK) {
-        if (running()) jpeg_draw(jpg, len, 0, STATUS_Y, 256);
+        if (running()) jpeg_draw(jpg, len, 0, s_view_h, 256);
         free(jpg);
     }
     s_status_at = ms();
@@ -145,7 +158,7 @@ static void draw_status(void)
 static void redraw_frame(int dim)
 {
     if (s_shown_slot >= 0 && s_shown_idx >= 0) rdl_draw(s_shown_slot, &s_shown, s_shown_idx, dim);
-    else board_fill(0, 0, BOARD.w, VIEW_H, 0x0000);
+    else board_fill(0, 0, BOARD.w, s_view_h, 0x0000);
 }
 
 static void bar(int x, int y, int w, int h, float frac)
@@ -156,16 +169,17 @@ static void bar(int x, int y, int w, int h, float frac)
 }
 
 // ---------------------------------------------------------------- picker
-static int s_pick_y, s_pick_h;
+static int s_pick_x, s_pick_y, s_pick_w, s_pick_h;
 
 static bool picker_draw(int hl)
 {
     char url[URL_MAX]; uint8_t *jpg; size_t len; int w, h;
-    snprintf(url, sizeof(url), "%s/weather/ui/picker.jpg?hl=%d&cur=%s", hub_url(), hl, s_views[s_cur].id);
+    snprintf(url, sizeof(url), "%s/weather/ui/picker.jpg?hl=%d&cur=%s&%s", hub_url(), hl, s_views[s_cur].id, s_prof);
     if (net_get(url, &jpg, &len, MAX_JPEG) != ESP_OK) return false;
     if (running() && jpeg_size(jpg, len, &w, &h) == ESP_OK) {
-        s_pick_h = h; s_pick_y = ((VIEW_H - h) / 2) & ~1;
-        jpeg_draw(jpg, len, PICK_X, s_pick_y, 256);
+        s_pick_w = w; s_pick_h = h;
+        s_pick_x = ((BOARD.w - w) / 2) & ~1; s_pick_y = ((s_view_h - h) / 2) & ~1;
+        jpeg_draw(jpg, len, s_pick_x, s_pick_y, 256);
     }
     free(jpg);
     return true;
@@ -179,12 +193,13 @@ static void picker(void)
     int64_t deadline = ms() + PICK_IDLE_MS;
     while (running()) {
         key_ev_t ev;
-        if (xQueueReceive(s_keys, &ev, pdMS_TO_TICKS(40)) == pdTRUE && ev.btn == BTN_KEY && ev.type == KEY_SHORT) {
+        bool key = xQueueReceive(s_keys, &ev, pdMS_TO_TICKS(40)) == pdTRUE && ev.btn == BTN_KEY && ev.type == KEY_SHORT;
+        if (key || tapped()) {
             hl = (hl + 1) % s_nviews;
             picker_draw(hl); deadline = ms() + PICK_IDLE_MS;
         }
-        if (board_button_down(BTN_KEY)) deadline = ms() + PICK_IDLE_MS;   // don't time out mid-press
-        bar(PICK_X + 20, s_pick_y + s_pick_h - 10, 352, 4, (float)(deadline - ms()) / PICK_IDLE_MS);
+        if (board_button_down(BTN_KEY) || s_touched) deadline = ms() + PICK_IDLE_MS;   // don't time out mid-press
+        bar(s_pick_x + 20, s_pick_y + s_pick_h - 10, s_pick_w - 40, 4, (float)(deadline - ms()) / PICK_IDLE_MS);
         if (ms() >= deadline) break;
     }
     if (hl != s_cur) {
@@ -201,8 +216,9 @@ static void wait_events(int timeout_ms)
     do {
         key_ev_t ev;
         int left = (int)(end - ms());
-        if (xQueueReceive(s_keys, &ev, pdMS_TO_TICKS(left > 20 ? 20 : (left > 0 ? left : 0))) == pdTRUE
-            && ev.btn == BTN_KEY && ev.type == KEY_SHORT) picker();
+        bool key = xQueueReceive(s_keys, &ev, pdMS_TO_TICKS(left > 20 ? 20 : (left > 0 ? left : 0))) == pdTRUE
+                   && ev.btn == BTN_KEY && ev.type == KEY_SHORT;
+        if (key || tapped()) picker();
     } while (ms() < end && running() && !s_restart);
 }
 
@@ -212,7 +228,7 @@ static void play(void)
     loop_hdr_t h; int slot; char key[16];
     key_of(s_cur, key);
     if (!store_get(key, &h, &slot)) {                     // first boot / new view: wait for sync
-        if (s_shown_idx != -2) { board_fill(0, 0, BOARD.w, VIEW_H, 0x0000); s_shown_idx = -2; s_shown_slot = -1; }
+        if (s_shown_idx != -2) { board_fill(0, 0, BOARD.w, BOARD.h, 0x0000); s_shown_idx = -2; s_shown_slot = -1; }
         if (!s_status_at || ms() - s_status_at > STATUS_MS) draw_status();
         s_restart = false;
         wait_events(500);
@@ -220,6 +236,7 @@ static void play(void)
     }
     if (s_shown_slot >= 0 && s_shown_slot != slot) store_unmap(s_shown_slot);   // free the old mapping
     store_pin(slot); s_shown_slot = slot; s_shown = h;
+    if (h.height != s_view_h) { s_view_h = h.height; s_status_at = 0; }   // geometry comes with the loop
     s_restart = false;
     // Whole loop ~5 s plus a 1.5 s dwell on the latest frame, whatever the frame
     // count (the hub drops in-betweens when a stormy loop would not fit).
@@ -283,6 +300,7 @@ static void app_init(const cJSON *views)
     char saved[16];
     if (hub_nvs_get("wview", saved, sizeof(saved)) || old_radar_view(saved, sizeof(saved)))
         for (int i = 0; i < s_nviews; i++) if (!strcmp(s_views[i].id, saved)) s_cur = i;
+    snprintf(s_prof, sizeof(s_prof), "w=%d&h=%d&r=%d&panel=%s", BOARD.w, BOARD.h, BOARD.corner_r, BOARD.panel);
     s_keys = xQueueCreate(8, sizeof(key_ev_t));
     xTaskCreate(draw_task, "weather", 6144, NULL, 5, &s_draw);
     xTaskCreate(sync_task, "wsync", 6144, NULL, 3, NULL);

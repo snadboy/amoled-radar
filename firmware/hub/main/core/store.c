@@ -8,14 +8,19 @@
 
 static const char *TAG = "store";
 #define MAGIC   0x52445231u     // "RDR1"
-#define VERSION 4u      // 4 = hub bundles in 6 slots, ordered by seq (2 = radar RDL1 in 5 slots; re-downloaded)
+#define VERSION 6u      // 6 = per-slot write claims (5 could hold a slot two downloads wrote into); 5 = loop height
 
 static const esp_partition_t *s_part;
 static size_t s_slot_size;
 static SemaphoreHandle_t s_mx;
 static loop_hdr_t s_hdr[STORE_SLOTS];          // in-RAM copy of every slot's header
 static bool s_valid[STORE_SLOTS];
-static int s_writing = -1, s_pinned = -1;
+static int s_pinned = -1;
+// Slots being downloaded into, per slot: the weather and aircraft sync tasks write
+// concurrently. (A single "writing" slot let one task's commit clear the other's
+// claim, and a third download then erased and overwrote a slot mid-download.)
+static bool s_wr[STORE_SLOTS];
+static char s_wr_view[STORE_SLOTS][16];
 static uint32_t s_seq;              // highest seq committed so far
 static char s_views[8][16];
 static int s_nviews = -1;          // -1 = not told yet: treat every view as live
@@ -85,20 +90,22 @@ static bool live(const char *view)
 int store_begin(const char *view)
 {
     xSemaphoreTake(s_mx, portMAX_DELAY);
+    for (int i = 0; i < STORE_SLOTS; i++)       // this key's earlier, abandoned download
+        if (s_wr[i] && !strcmp(s_wr_view[i], view)) s_wr[i] = false;
     int pick = -1;
     for (int i = 0; i < STORE_SLOTS && pick < 0; i++) {
         // A mapped slot is in use (an app is drawing from it): never erase it. Apps
         // unmap a slot when they stop showing it.
-        if (i == s_pinned || i == s_writing || s_mp[i]) continue;
+        if (i == s_pinned || s_wr[i] || s_mp[i]) continue;
         bool current = false;                   // newest bundle of a view still offered?
         if (s_valid[i]) current = live(s_hdr[i].view) && newest(s_hdr[i].view) == i;
         if (!current) pick = i;
     }
-    if (pick >= 0) { s_valid[pick] = false; s_writing = pick; }
+    if (pick >= 0) { s_valid[pick] = false; s_wr[pick] = true; strlcpy(s_wr_view[pick], view, sizeof(s_wr_view[0])); }
     xSemaphoreGive(s_mx);
     if (pick < 0) return -1;
     esp_err_t e = esp_partition_erase_range(s_part, base(pick), s_slot_size);
-    if (e != ESP_OK) { ESP_LOGE(TAG, "erase slot %d: %s", pick, esp_err_to_name(e)); s_writing = -1; return -1; }
+    if (e != ESP_OK) { ESP_LOGE(TAG, "erase slot %d: %s", pick, esp_err_to_name(e)); s_wr[pick] = false; return -1; }
     ESP_LOGI(TAG, "slot %d erased for %s", pick, view);
     return pick;
 }
@@ -124,7 +131,7 @@ esp_err_t store_commit(int slot, loop_hdr_t *hdr)
     esp_err_t e = esp_partition_write(s_part, base(slot), hdr, sizeof(*hdr));   // header last
     xSemaphoreTake(s_mx, portMAX_DELAY);
     if (e == ESP_OK) { s_hdr[slot] = *hdr; s_valid[slot] = true; }
-    s_writing = -1;
+    s_wr[slot] = false;
     xSemaphoreGive(s_mx);
     return e;
 }

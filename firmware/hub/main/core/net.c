@@ -105,17 +105,22 @@ esp_err_t net_stream(const char *url, net_sink_t sink, void *ctx, size_t *total)
         esp_http_client_close(h); esp_http_client_cleanup(h);
         return ESP_FAIL;
     }
-    static uint8_t buf[4096];               // only the sync task streams
+    // One buffer per download: the weather and aircraft sync tasks stream at the same
+    // time (a single static buffer had each one flashing the other's bytes).
+    uint8_t *buf = malloc(4096);
+    if (!buf) { esp_http_client_close(h); esp_http_client_cleanup(h); return ESP_ERR_NO_MEM; }
     size_t got = 0;
     err = ESP_OK;
     while (got < (size_t)cl) {
-        int n = esp_http_client_read(h, (char *)buf, sizeof(buf));
+        int n = esp_http_client_read(h, (char *)buf, 4096);
         if (n <= 0) { err = ESP_FAIL; break; }
         if ((err = sink(ctx, buf, (size_t)n)) != ESP_OK) break;
         got += (size_t)n;
     }
+    free(buf);
     esp_http_client_close(h); esp_http_client_cleanup(h);
     *total = got;
+    if (got != (size_t)cl) ESP_LOGW(TAG, "stream %s: %u of %lld bytes (%s)", url, (unsigned)got, cl, esp_err_to_name(err));
     return (err == ESP_OK && got == (size_t)cl) ? ESP_OK : ESP_FAIL;
 }
 

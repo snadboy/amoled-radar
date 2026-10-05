@@ -774,7 +774,7 @@ static lv_obj_t *make_pill(lv_obj_t *parent, lv_align_t align, int32_t x, int32_
 
 static void build_ui(void)
 {
-    int W = BOARD.w, H = BOARD.h, in = BOARD.corner_r / 2;     // pills sit clear of the rounded corners
+    int W = BOARD.w, H = BOARD.h, in = BOARD.corner_r / 2 > 12 ? BOARD.corner_r / 2 : 12;   // clear of rounded corners
     lv_obj_t *scr = lv_screen_active();
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 

@@ -16,7 +16,6 @@
 
 static const char *TAG = "rdl";
 #define W     (BOARD.w)
-#define H     424
 #define ROWS  16
 #define MASK  (TINFL_LZ_DICT_SIZE - 1)
 
@@ -40,7 +39,7 @@ esp_err_t rdl_parse(int slot, loop_hdr_t *h)
     if (store_read(slot, STORE_DATA_OFF, hdr, sizeof(hdr)) != ESP_OK) return ESP_FAIL;
     uint16_t ver, n, w, hh;
     memcpy(&ver, hdr + 4, 2); memcpy(&n, hdr + 6, 2); memcpy(&w, hdr + 8, 2); memcpy(&hh, hdr + 10, 2);
-    if (memcmp(hdr, "RDL1", 4) || ver != 1 || w != W || hh != H || n == 0 || n > STORE_MAX_FRAMES) {
+    if (memcmp(hdr, "RDL1", 4) || ver != 1 || w != W || hh == 0 || hh > BOARD.h || n == 0 || n > STORE_MAX_FRAMES) {
         ESP_LOGE(TAG, "bad loop header (v%u %ux%u n=%u)", ver, w, hh, n);
         return ESP_FAIL;
     }
@@ -52,6 +51,7 @@ esp_err_t rdl_parse(int slot, loop_hdr_t *h)
         h->off[i] = STORE_DATA_OFF + off; h->len[i] = len; h->key[i] = e[8];
     }
     h->nframes = n;
+    h->height = hh;
     h->pal_off = STORE_DATA_OFF + 16 + 12 * n;
     h->base_off = h->pal_off + 512;
     return ESP_OK;
@@ -75,6 +75,7 @@ esp_err_t rdl_draw(int slot, const loop_hdr_t *h, int i, int dim)
         memcpy(s_pal, mp + h->pal_off, sizeof(s_pal));
         s_pal_slot = slot; s_pal_loop = h->loop_id;
     }
+    const int H = h->height;
     const uint8_t *map = mp + h->base_off;
     const uint8_t *in = mp + h->off[i];
     size_t in_left = h->len[i], ring_pos = 0;

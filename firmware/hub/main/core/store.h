@@ -17,7 +17,7 @@ typedef struct {
     uint32_t magic, version;
     uint32_t loop_id;
     char     view[16];
-    uint16_t nframes, reserved;
+    uint16_t nframes, height;                // RDL1: rows per frame (the radar view's height)
     uint32_t base_off, pal_off;              // RDL1: map pixels and palette within the slot
     uint32_t off[STORE_MAX_FRAMES];
     uint32_t len[STORE_MAX_FRAMES];

@@ -26,6 +26,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from . import render as R
+from .. import core
 
 ID = "weather"
 
@@ -77,10 +78,36 @@ DEFAULT_CITIES = [
 CITIES = json.loads(os.environ["RADAR_CITIES"]) if os.environ.get("RADAR_CITIES") else DEFAULT_CITIES
 BY_ID  = {c["id"]: c for c in CITIES}
 
+# State per (city, profile). Loops are rendered for every profile in use: the default
+# panel always, plus any profile a device registers or asks for (MAX_GEOMS at most).
+MAX_GEOMS = 4
 _lock  = threading.Lock()
-_state = {c["id"]: {"loop_id": 0, "frames": [], "times": [], "keys": [], "status": b"",
-                    "built": 0, "status_built": 0, "radar_err": None, "status_err": None}
-          for c in CITIES}
+_wake  = threading.Event()             # a new profile appeared: render it now
+_geoms = {R.DEFAULT_GEOM.key: R.DEFAULT_GEOM}
+_state = {}
+
+def _st(cid, g):
+    """The state dict for a city at a profile (caller holds _lock)."""
+    return _state.setdefault((cid, g.key), {"loop_id": 0, "frames": [], "times": [], "keys": [], "status": b"",
+                                            "built": 0, "status_built": 0, "radar_err": None, "status_err": None})
+
+def add_geom(w, h, r, panel):
+    """Render loops for this profile from now on. Returns its Geom, or None if the
+    profile is invalid or there are already MAX_GEOMS."""
+    try:
+        w, h, r = int(w), int(h), int(r)
+    except (TypeError, ValueError):
+        return None
+    if not (100 <= w <= 2048 and 100 <= h <= 2048 and 0 <= r <= min(w, h) // 2 and panel in ("amoled", "lcd")):
+        return None
+    g = R.Geom(w, h, r, panel)
+    with _lock:
+        if g.key in _geoms: return _geoms[g.key]
+        if len(_geoms) >= MAX_GEOMS: return None
+        _geoms[g.key] = g
+    print("[weather] new profile %s -- rendering it" % g.key, flush=True)
+    _wake.set()
+    return g
 
 def clock(epoch, city):
     """Local clock time for the city being shown. The container runs on UTC, so
@@ -104,13 +131,14 @@ def clear_air_filter_on(city):
     except (TypeError, ValueError):
         return False            # no reading: keep the band rather than risk hiding snow
 
-def build_radar(city, maps):
+def build_radar(city, maps, g):
     lat, lon = city["lat"], city["lon"]
     suppress = clear_air_filter_on(city)
-    bm   = R.darken_for_amoled(R.basemap(lat, lon, city))
-    OW, OH = R.PANEL + 2 * R.ORBIT_PX, R.VIEW_H + 2 * R.ORBIT_PX
-    base = R.decorate(bm.resize((OW, OH), R.Image.LANCZOS), city).convert("RGB")
-    ox, oy = R.orbit_offset(int(time.time() // RADAR_S))
+    bm   = R.darken_for_amoled(R.basemap(lat, lon, city, g))
+    O = g.orbit
+    OW, OH = g.w + 2 * O, g.view_h + 2 * O
+    base = R.decorate(bm.resize((OW, OH), R.Image.LANCZOS), city, g).convert("RGB")
+    ox, oy = R.orbit_offset(int(time.time() // RADAR_S), g)
 
     host = maps["host"]
     want = (maps["radar"]["past"] + maps["radar"].get("nowcast", []))[-N_FRAMES:]
@@ -123,7 +151,7 @@ def build_radar(city, maps):
     qc_used = 0
     layers, stamps = [], []
     for f in want:
-        layer = R.radar(host, f["path"], lat, lon, city)
+        layer = R.radar(host, f["path"], lat, lon, city, g)
         if R.is_watermark(layer):
             raise RuntimeError("RainViewer returned a watermark tile at zoom %d "
                                "-- the free tier caps at 7" % city.get("radar_zoom", R.RADAR_ZOOM))
@@ -131,21 +159,20 @@ def build_radar(city, maps):
             layer = R.suppress_clear_air(layer)      # before resampling blends colours
         layer = layer.resize((OW, OH), R.Image.LANCZOS)
         try:
-            mask = R.qc_mask(lat, lon, city, f["time"], qc_avail, OW, OH)
+            mask = R.qc_mask(lat, lon, city, f["time"], qc_avail, OW, OH, g)
             if mask is not None:
                 layer = R.apply_mask(layer, mask); qc_used += 1
         except Exception as e:
             print("[radar] %s NOAA QC frame failed (%s) -- left unmasked" % (city["id"], str(e)[:60]), flush=True)
         layers.append(layer); stamps.append(f["time"])
 
-    pts = R.place_pixels(city.get("places", []), lat, lon, OW, OH, city)
+    pts = R.place_pixels(city.get("places", []), lat, lon, OW, OH, city, g)
 
     def compose(layer, frac, left, right):
         frame = base.copy()
         if layer is not None: frame.paste(layer, (0, 0), layer)
-        R.draw_places(frame, pts, crosshair=not city.get("wide"))
-        frame = frame.crop((R.ORBIT_PX + ox, R.ORBIT_PX + oy,
-                            R.ORBIT_PX + ox + R.PANEL, R.ORBIT_PX + oy + R.VIEW_H))
+        R.draw_places(frame, pts, crosshair=not city.get("wide"), g=g)
+        frame = frame.crop((O + ox, O + oy, O + ox + g.w, O + oy + g.view_h))
         return R.progress_bar(frame, frac, left, right, ox, oy)
 
     # Interpolate the radar layer only, then composite. Fewer in-betweens if the
@@ -167,55 +194,64 @@ def build_radar(city, maps):
         blob = R.encode_loop(compose(None, 0.0, left, right), imgs, keys)
         if len(blob) <= LOOP_BUDGET or tw == 0:
             break
-        print("[radar] %s loop %.1f MB with %d in-betweens > budget, trying fewer" % (city["id"], len(blob) / 1e6, tw), flush=True)
+        print("[radar] %s %s loop %.1f MB with %d in-betweens > budget, trying fewer" % (city["id"], g.key, len(blob) / 1e6, tw), flush=True)
     out = [_jpeg(im) for im in imgs]
     return out, [int(t) for t in times], keys, {"clear_air": suppress, "qc_masked": qc_used,
                                                  "real_frames": len(layers), "blob": blob, "tweens": tw}
 
 _temps = {}
 
-def build_status(city):
+def build_status(city, g):
     temp, hum = reading(city)
     _temps[city["id"]] = temp
     stamp = clock(time.time(), city)
     if city.get("status_label"):          # whose reading this is, when it isn't the view's
         stamp = "%s \u00b7 %s" % (city["status_label"], stamp)
-    return _jpeg(R.status_strip(temp, hum, stamp, city["name"]))
+    return _jpeg(R.status_strip(temp, hum, stamp, city["name"], g))
 
 def radar_loop():
+    only_new = False                       # woken for a new profile: render just the missing ones
     while True:
         try:
             maps = json.loads(R.fetch("https://api.rainviewer.com/public/weather-maps.json"))
         except Exception as e:
             maps = None
             print("[radar] RainViewer index FAILED: %s" % e, flush=True)
-        for c in CITIES:
-            if maps is None:
-                with _lock: _state[c["id"]]["radar_err"] = "RainViewer index unavailable"
-                continue
-            try:
-                frames, times, keys, info = build_radar(c, maps)
-                with _lock:
-                    _state[c["id"]].update(loop_id=int(time.time()), frames=frames, times=times,
-                                           keys=keys, clear_air_filtered=info["clear_air"],
-                                           blob=info["blob"], tweens_used=info["tweens"],
-                                           qc_masked="%d/%d" % (info["qc_masked"], info["real_frames"]),
-                                           built=int(time.time()), radar_err=None)
-                print("[radar] %s ok (%d frames)" % (c["id"], len(frames)), flush=True)
-            except Exception as e:
-                with _lock: _state[c["id"]]["radar_err"] = str(e)[:200]
-                print("[radar] %s FAILED: %s" % (c["id"], e), flush=True)
-        time.sleep(RADAR_S)
+        with _lock: geoms = list(_geoms.values())
+        for g in geoms:
+            for c in CITIES:
+                with _lock: st = _st(c["id"], g)
+                if only_new and st["frames"]:
+                    continue
+                if maps is None:
+                    with _lock: st["radar_err"] = "RainViewer index unavailable"
+                    continue
+                try:
+                    frames, times, keys, info = build_radar(c, maps, g)
+                    with _lock:
+                        st.update(loop_id=int(time.time()), frames=frames, times=times,
+                                  keys=keys, clear_air_filtered=info["clear_air"],
+                                  blob=info["blob"], tweens_used=info["tweens"],
+                                  qc_masked="%d/%d" % (info["qc_masked"], info["real_frames"]),
+                                  built=int(time.time()), radar_err=None)
+                    print("[radar] %s %s ok (%d frames)" % (c["id"], g.key, len(frames)), flush=True)
+                except Exception as e:
+                    with _lock: st["radar_err"] = str(e)[:200]
+                    print("[radar] %s %s FAILED: %s" % (c["id"], g.key, e), flush=True)
+        only_new = _wake.wait(RADAR_S)
+        _wake.clear()
 
 def status_loop():
     while True:
+        with _lock: geoms = list(_geoms.values())
         for c in CITIES:
-            try:
-                v = build_status(c)
-                with _lock: _state[c["id"]].update(status=v, status_built=int(time.time()), status_err=None)
-            except Exception as e:
-                with _lock: _state[c["id"]]["status_err"] = str(e)[:200]
-                print("[status] %s FAILED: %s" % (c["id"], e), flush=True)
+            for g in geoms:
+                try:
+                    v = build_status(c, g)
+                    with _lock: _st(c["id"], g).update(status=v, status_built=int(time.time()), status_err=None)
+                except Exception as e:
+                    with _lock: _st(c["id"], g)["status_err"] = str(e)[:200]
+                    print("[status] %s %s FAILED: %s" % (c["id"], g.key, e), flush=True)
         time.sleep(STATUS_S)
 
 def views():
@@ -223,24 +259,42 @@ def views():
             for c in CITIES]
 
 def start():
+    for pr in core.profiles():             # devices already registered: render their panels from the start
+        add_geom(pr.get("w"), pr.get("h"), pr.get("r"), pr.get("panel", "amoled"))
+    _wake.clear()
     threading.Thread(target=radar_loop, daemon=True).start()
     threading.Thread(target=status_loop, daemon=True).start()
     print("[weather] cities=%s  (radar every %ds, status every %ds)"
           % (",".join(c["id"] for c in CITIES), RADAR_S, STATUS_S), flush=True)
 
 def health():
+    """Healthy when the default profile has a loop and a strip for every city; other
+    profiles are listed (a profile that was just added needs a few minutes)."""
+    d = R.DEFAULT_GEOM.key
     with _lock:
         per = {cid: {"frames": len(st["frames"]), "status": bool(st["status"]),
                      "radar_err": st["radar_err"], "status_err": st["status_err"]}
-               for cid, st in _state.items()}
-    return all(v["frames"] and v["status"] for v in per.values()), per
+               for (cid, gk), st in _state.items() if gk == d}
+        others = {gk: sum(1 for (c, k), st in _state.items() if k == gk and st["frames"])
+                  for gk in _geoms if gk != d}
+    ok = len(per) == len(CITIES) and all(v["frames"] and v["status"] for v in per.values())
+    return ok, dict(per, profiles={k: "%d/%d cities ready" % (n, len(CITIES)) for k, n in others.items()})
 
-def _view(h, vid, rest):
-    with _lock: st = dict(_state[vid])
+def _geom(h, q):
+    """The profile a request is for (default panel if it names none). Sends the error
+    response itself and returns None for a bad or unaccepted profile."""
+    if "w" not in q:
+        return R.DEFAULT_GEOM
+    g = add_geom(q.get("w"), q.get("h"), q.get("r", "0"), q.get("panel", "amoled"))
+    if g is None: h.json({"error": "bad profile, or too many profiles"}, 400)
+    return g
+
+def _view(h, vid, rest, g):
+    with _lock: st = dict(_st(vid, g))
     if rest == "manifest.json":
         return h.json({
             "city": vid, "loop_id": st["loop_id"], "frames": len(st["frames"]),
-            "w": R.PANEL, "h": R.PANEL, "view_h": R.VIEW_H, "status_h": R.STATUS_H,
+            "w": g.w, "h": g.h, "view_h": g.view_h, "status_h": g.status_h, "profile": g.key,
             "built": st["built"], "status_built": st["status_built"],
             "sizes": [len(f) for f in st["frames"]], "times": st["times"], "keys": st["keys"],
             "tweens_per_10min": TWEENS, "tween_mode": TWEEN_MODE,
@@ -261,12 +315,12 @@ def _view(h, vid, rest):
         return h.send(st["frames"][i], "image/jpeg")
     return False
 
-def _ui(h, name, q):
+def _ui(h, name, q, g):
     if name == "picker.jpg":
         try: hl = int(q.get("hl", "0"))
         except ValueError: hl = 0
         entries = [(c["id"], c["name"], _temps.get(c["id"])) for c in CITIES]
-        return h.send(_jpeg(R.picker_panel(entries, hl % len(entries), q.get("cur", ""))), "image/jpeg")
+        return h.send(_jpeg(R.picker_panel(entries, hl % len(entries), q.get("cur", ""), g)), "image/jpeg")
     if name == "hold.jpg":
         return h.send(_jpeg(R.hold_pill()), "image/jpeg")
     return False
@@ -276,9 +330,15 @@ def handle(h, p, q):
     parts = p.split("/")
     if p in ("/weather/views.json", "/cities.json"):
         return h.json(views())
-    if (len(parts) == 4 and parts[1:3] == ["weather", "ui"]) or (len(parts) == 3 and parts[1] == "ui"):
-        return _ui(h, parts[-1], q)
+    ui = (len(parts) == 4 and parts[1:3] == ["weather", "ui"]) or (len(parts) == 3 and parts[1] == "ui")
+    view = len(parts) >= 4 and parts[1] in ("weather", "c") and parts[2] in BY_ID
+    if not (ui or view):
+        return False
+    g = _geom(h, q)                         # ?w=&h=&r=&panel= (none: the default panel)
+    if g is None:
+        return True
+    if ui:
+        return _ui(h, parts[-1], q, g)
     # /weather/<id>/... and legacy /c/<id>/...
-    if len(parts) >= 4 and parts[1] in ("weather", "c") and parts[2] in BY_ID:
-        return _view(h, parts[2], "/".join(parts[3:]))
+    return _view(h, parts[2], "/".join(parts[3:]), g)
     return False
