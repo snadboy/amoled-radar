@@ -215,29 +215,49 @@ def build_radar(city, maps, g):
         elif city.get("storm_label"): R.offset_pill(frame, city["storm_label"], g, close=False)
         return frame
 
-    # Interpolate the radar layer only, then composite. Fewer in-betweens if the
-    # device-format loop would not fit the board's flash slot (a big storm changes
-    # most pixels in every frame): 3 per 10 min, then 2, 1, real frames only.
-    for tw in sorted({t for t in (TWEENS, 2, 1, 0) if t <= TWEENS}, reverse=True):
+    # Interpolate the radar layer only, then composite. A loop must fit the board's
+    # flash slot, and a big storm changes most pixels in every frame. Over budget:
+    # first fewer colours (64: the radar palette has a few dozen steps), then a shorter
+    # history that keeps 2+ in-betweens per 10 min (a busy loop that jumps 10 minutes a
+    # frame looks jerky), and only then fewer in-betweens.
+    def build(nreal, tw):
+        ls, ss = layers[-nreal:], stamps[-nreal:]
         seq, times, keys = [], [], []
-        for i, layer in enumerate(layers):
-            keys.append(len(seq)); seq.append(layer); times.append(stamps[i])
-            if i + 1 < len(layers) and tw > 0:
-                n = R.tween_count(stamps[i + 1] - stamps[i], tw)
-                for k, twl in enumerate(R.tweens(layer, layers[i + 1], n, TWEEN_MODE)):
+        for i, layer in enumerate(ls):
+            keys.append(len(seq)); seq.append(layer); times.append(ss[i])
+            if i + 1 < len(ls) and tw > 0:
+                n = R.tween_count(ss[i + 1] - ss[i], tw)
+                for k, twl in enumerate(R.tweens(layer, ls[i + 1], n, TWEEN_MODE)):
                     seq.append(twl)
-                    times.append(stamps[i] + (stamps[i + 1] - stamps[i]) * (k + 1) / (n + 1.0))
+                    times.append(ss[i] + (ss[i + 1] - ss[i]) * (k + 1) / (n + 1.0))
         t_first, t_last = times[0], times[-1]
         left, right = clock(t_first, city), clock(t_last, city)
         span = float(t_last - t_first) or 1.0
         imgs = [compose(layer, (t - t_first) / span, left, right) for layer, t in zip(seq, times)]
-        blob = R.encode_loop(compose(None, 0.0, left, right), imgs, keys)
-        if len(blob) <= LOOP_BUDGET or tw == 0:
+        return imgs, times, keys, compose(None, 0.0, left, right)
+
+    nreal, tw, colors = len(layers), TWEENS, 255
+    fixed = 16 + 512 + g.w * g.view_h * 2               # header, palette, base map
+    while True:
+        imgs, times, keys, base_img = build(nreal, tw)
+        blob = R.encode_loop(base_img, imgs, keys, colors)
+        if len(blob) <= LOOP_BUDGET or (nreal <= 2 and tw == 0):
             break
-        print("[radar] %s %s loop %.1f MB with %d in-betweens > budget, trying fewer" % (city["id"], g.key, len(blob) / 1e6, tw), flush=True)
+        print("[radar] %s %s loop %.1f MB (%d real, %d in-betweens, %d colours) > budget"
+              % (city["id"], g.key, len(blob) / 1e6, nreal, tw, colors), flush=True)
+        if colors > 64:
+            colors = 64; continue
+        per = (len(blob) - fixed) / float(len(imgs))
+        fit = int((LOOP_BUDGET * 0.95 - fixed) / per)   # frames that should fit
+        for t in [x for x in (tw, 2, 1, 0) if x <= tw]:
+            n = min(nreal, (fit + t) // (t + 1))         # n + (n - 1) * t frames
+            if n >= 5 or t == 0:
+                break
+        if (n, t) == (nreal, tw): n -= 1                 # always make progress
+        nreal, tw = max(2, n), t
     out = [_jpeg(im) for im in imgs]
     return out, [int(t) for t in times], keys, {"clear_air": suppress, "qc_masked": qc_used,
-                                                 "real_frames": len(layers), "blob": blob, "tweens": tw}
+                                                 "real_frames": nreal, "blob": blob, "tweens": tw, "colors": colors}
 
 _temps = {}
 

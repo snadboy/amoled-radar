@@ -712,7 +712,7 @@ def _rgb565_be(a):
     v = ((a[..., 0].astype(np.uint16) >> 3) << 11) | ((a[..., 1].astype(np.uint16) >> 2) << 5) | (a[..., 2].astype(np.uint16) >> 3)
     return v.astype(">u2")
 
-def encode_loop(base_img, frames, keys):
+def encode_loop(base_img, frames, keys, colors=255):
     import numpy as np
     base = np.asarray(base_img.convert("RGB"))
     h, w = base.shape[:2]
@@ -724,8 +724,8 @@ def encode_loop(base_img, frames, keys):
     ncol = 0
     if changed:
         allpx = np.concatenate(changed).reshape(-1, 1, 3)
-        q = Image.fromarray(allpx.astype(np.uint8), "RGB").quantize(255, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-        pal = q.getpalette()[:255 * 3]
+        q = Image.fromarray(allpx.astype(np.uint8), "RGB").quantize(colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        pal = q.getpalette()[:colors * 3]
         ncol = len(pal) // 3
         pal_img.putpalette(pal + [0] * (768 - len(pal)))
         pal_rgb = np.array(pal, dtype=np.uint8).reshape(-1, 3)
