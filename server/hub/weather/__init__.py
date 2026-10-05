@@ -25,7 +25,7 @@ import io, json, os, threading, time, zlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import render as R
+from . import render as R, storm
 from .. import core, settings
 
 ID = "weather"
@@ -54,7 +54,16 @@ CLEAR_AIR_MIN_F = float(os.environ.get("RADAR_CLEAR_AIR_MIN_F", "40"))
 # Cities live in the hub's settings (admin page): settings.places(). Only places some
 # device shows are rendered (settings.places_in_use()).
 def _cities():
-    return settings.places_in_use()
+    return [_live(p) for p in settings.places_in_use()]
+
+def _live(p):
+    """A place as it renders now: "active" moved to the current storm (see storm.py),
+    with the real cities as its towns and its distance from home in the status strip."""
+    if not p or p.get("auto") != "storm": return p
+    cur = storm.current()
+    if not cur: return p
+    towns = [[q["name"], q["lat"], q["lon"], True] for q in settings.places() if not q.get("auto")]
+    return dict(p, lat=cur["lat"], lon=cur["lon"], places=towns, status_label=cur["label"], storm_label=cur["short"])
 
 # ---------------------------------------------------------------- panned views
 # A device can move its view off a city in 50-mile steps (swipe, or HA): the view id is
@@ -76,7 +85,7 @@ def _place(vid):
     p = parse_pan(vid)
     if p is None: return None
     cid, dx, dy = p
-    base = settings.place(cid)
+    base = _live(settings.place(cid))
     if not base or (dx, dy) == (0, 0): return base
     lat, lon = core.pan_centre(base["lat"], base["lon"], dx, dy)
     towns = [t for t in base.get("places", []) if t[0] != base["name"]] + [[base["name"], base["lat"], base["lon"], True]]
@@ -205,6 +214,7 @@ def build_radar(city, maps, g):
         frame = frame.crop((O + ox, O + oy, O + ox + g.w, O + oy + g.view_h))
         frame = R.progress_bar(frame, frac, left, right, ox, oy, g)
         if city.get("pan_label"): R.offset_pill(frame, city["pan_label"], g)   # also the device's recentre target
+        elif city.get("storm_label"): R.offset_pill(frame, city["storm_label"], g, close=False)
         return frame
 
     # Interpolate the radar layer only, then composite. Fewer in-betweens if the
@@ -252,9 +262,13 @@ def radar_loop():
             maps = None
             print("[radar] RainViewer index FAILED: %s" % e, flush=True)
         with _lock: geoms = list(_geoms.values())
-        cities = _cities()
         global _maps
-        if maps: _maps = maps
+        if maps:
+            _maps = maps
+            if any(p.get("auto") == "storm" for p in settings.places_in_use()):
+                home = next((p for p in settings.places() if not p.get("auto")), None)
+                if home: storm.update(maps, home)
+        cities = _cities()                     # after the storm moved
         _pan_wake.set()                        # panned views refresh with the same index
         for g in geoms:
             for c in cities:

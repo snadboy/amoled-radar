@@ -352,7 +352,8 @@ function render() {
   if (!devDirty && !document.activeElement?.closest("#editor")) renderEditor();
   // ---- places, views
   $("placerows").innerHTML = S.places.map(p => `<tr><td>${esc(p.name)}</td><td>${(+p.lat).toFixed(3)}, ${(+p.lon).toFixed(3)}</td>
-    <td>${p.temp.source == "ha" ? "HA: " + esc(p.temp.temp) : "NWS station"}</td><td><button class="b" onclick="editPlace('${p.id}')">Edit</button></td></tr>`).join("");
+    <td>${p.auto ? "Automatic: the strongest storm within 800 mi of " + esc((S.places[0] || {}).name || "home") : p.temp.source == "ha" ? "HA: " + esc(p.temp.temp) : "NWS station"}</td>
+    <td>${p.auto ? "" : `<button class="b" onclick="editPlace('${p.id}')">Edit</button>`}</td></tr>`).join("");
   $("viewrows").innerHTML = S.views.map(v => `<tr><td>${esc(v.name)}</td><td>${(+v.lat).toFixed(4)}, ${(+v.lon).toFixed(4)}</td>
     <td>${v.levels.join(", ")} mi</td><td><button class="b" onclick="editView('${v.id}')">Edit</button></td></tr>`).join("");
   // ---- connections

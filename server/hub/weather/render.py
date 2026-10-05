@@ -437,12 +437,13 @@ def progress_bar(frame, frac, left, right, ox=0, oy=0, g=None):
 # (firmware: a tap in the top PAN_TAP_H px while panned).
 PAN_TAP_H = 80
 
-def offset_pill(frame, text, g=None):
-    """Burn "50 mi W  x" into a frame (the radar view, after the orbit crop)."""
+def offset_pill(frame, text, g=None, close=True):
+    """Burn "50 mi W  x" into a frame (the radar view, after the orbit crop). Without
+    close: just the label (the Active view's "Storm 390 mi SW")."""
     g = g or DEFAULT_GEOM
     d = ImageDraw.Draw(frame, "RGBA")
     f = fnt(13 if g.round else 16, True)
-    label = "%s   \u2715" % text
+    label = "%s   \u2715" % text if close else text
     w = d.textlength(label, font=f)
     ph = 24 if g.round else 30
     if g.round: x0, y0 = int(g.w / 2 - (w + 24) / 2), 24      # top centre, inside the circle

@@ -162,7 +162,15 @@ def _delete(table, doc_id):
     with _lock:
         db = _conn(); db.execute("DELETE FROM %s WHERE id=?" % table, (doc_id,)); db.commit()
 
-places      = lambda: _docs("places")
+# "active" is built in: the weather app moves it to the strongest storm near home (the
+# first real place) every radar cycle; it is never stored and can't be edited.
+ACTIVE = "active"
+
+def places():
+    real = _docs("places")
+    home = real[0] if real else {"lat": 41.9, "lon": -88.3, "tz": "America/Chicago"}
+    return real + [{"id": ACTIVE, "name": "Active storm", "auto": "storm", "lat": home["lat"], "lon": home["lon"],
+                    "tz": home.get("tz", "America/Chicago"), "temp": {"source": "nws"}, "places": []}]
 air_views   = lambda: _docs("air_views")
 put_place   = lambda doc: _put("places", doc)
 put_view    = lambda doc: _put("air_views", doc)
@@ -191,9 +199,10 @@ def device(dev_id):
     pruned of places / views that no longer exist)."""
     d = _raw_device(dev_id) or {}
     pl, av = [p["id"] for p in places()], [v["id"] for v in air_views()]
+    pl_default = [p for p in pl if p != ACTIVE] or pl     # new devices: the real cities
     apps = [a for a in d.get("apps", list(APPS)) if a in APPS] or list(APPS)
     w = d.get("weather", {}); a = d.get("aircraft", {})
-    wp = [p for p in w.get("places", pl) if p in pl] or pl[:1]
+    wp = [p for p in w.get("places", pl_default) if p in pl] or pl[:1]
     view = a.get("view") if a.get("view") in av else (av[0] if av else None)
     levels = (air_view(view) or {}).get("levels", [50])
     pr = d.get("profile", {})

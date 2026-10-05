@@ -235,6 +235,7 @@ def handle(h, method, p, q, body, apps):
         if method == "GET" and parts == ["ha", "entities"]:
             return h.json(ha.entities(q.get("domain") or None))
         if len(parts) == 2 and parts[0] in ("places", "views"):
+            if parts == ["places", settings.ACTIVE]: raise Bad("the Active storm view is automatic")
             put, delete, clean = ((settings.put_place, settings.del_place, _clean_place) if parts[0] == "places"
                                   else (settings.put_view, settings.del_view, _clean_view))
             if method == "PUT": put(clean(parts[1], data)); return h.json(_state())
