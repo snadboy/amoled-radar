@@ -21,7 +21,8 @@ One server for every small display: weather radar today, aircraft next (ported f
   and app switching verified by the owner 2026-10-04.
 - **Bedrock deploy DONE (2026-10-04):** Dockhand git stack 31 `amoled-radar` (env 11, docker-homelab
   `amoled-radar/docker-compose.yml`, manual sync) runs image `display-hub:8cd4601` as container
-  `display-hub` on 192.168.86.135:8098; humans: https://displays.swallow-spectrum.ts.net. Stack,
+  `display-hub` on 192.168.86.135:8098 (image tag: see docker-homelab); humans:
+  https://displays.swallow-spectrum.ts.net. Stack,
   service and volume keep the amoled-radar name on purpose (in-place replace, cache kept).
   Stack variables (Dockhand): HASS_SERVER/TOKEN, OPENSKY_CLIENT_ID/SECRET, AIR_LAT/AIR_LON.
   Firmware is published in bedrock's volume `amoled-radar_amoled-radar-cache`, `firmware/` (root
@@ -29,7 +30,7 @@ One server for every small display: weather radar today, aircraft next (ported f
   Both boards run 32d42ef-10042116 (points at bedrock). `radar-dev` on sdevs is retired;
   `~/radar-dev-cache` kept as a backup.
   **To ship a server change:** push -> CI builds ghcr.io/snadboy/display-hub:<sha> -> bump the tag
-  in docker-homelab -> Deploy in Dockhand. Pending for the next bump: 70e7546 (empty AIR_* = default).
+  in docker-homelab -> Deploy in Dockhand. 
   **To ship firmware:** `BOARD=c6 ./build.sh`, then copy build-c6/display_hub.bin + version.txt into
   bedrock's volume `firmware/hub/` (P4: build-p4 -> `firmware/hub-p4/`). Boards check every 6 h
   and 90 s after boot.
@@ -58,8 +59,10 @@ One server for every small display: weather radar today, aircraft next (ported f
   per-board build dirs (`BOARD=p4 ./build.sh` -> build-p4/), OTA channel `hub-p4`. ESP-IDF's
   default chip revision is 3.x only (CONFIG_ESP32P4_REV_MIN_301): read the real one with
   esptool before flashing. esp_hosted SDIO defaults: CMD 19, CLK 18, D0-D3 14-17, C6 reset 54.
-  Display 2 currently runs a test build pointed at a test hub on sdevs :8099 (container
-  hub-test, cache in the session scratchpad) -- move it back to bedrock when done.
+  2026-10-05: bedrock runs display-hub:00190cd (docker-homelab e7dd5ca); both displays run
+  firmware 210ebd5-10051016 from bedrock (published on root + `hub` channels); test hub removed.
+  The displays need only power now (any USB charger) -- sdevs USB is for first flash, rescue
+  and logs.
 - Builds: `[BOARD=c6|p4] ./build.sh` (hub = bedrock by default; `HUB_SERVER_URL=...` for another)
   -> `build-<board>/display_hub.bin`. Flash by SERIAL, never by ttyACM number:
   `BOARD=c6 PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
