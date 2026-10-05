@@ -627,11 +627,13 @@ static void sync_bundle(void)
 {
     char url[URL_MAX]; uint8_t *js; size_t len;
     snprintf(url, sizeof(url), "%s/aircraft/%s/manifest.json?w=%d&h=%d&r=%d", hub_url(), s_view, BOARD.w, BOARD.h, BOARD.corner_r);
-    uint32_t want = 0; size_t size = 0;
+    uint32_t want = 0, crc = 0; size_t size = 0;
     if (net_get(url, &js, &len, 8192) == ESP_OK) {
         cJSON *m = cJSON_Parse((char *)js);
         free(js);
-        const cJSON *id = cJSON_GetObjectItem(m, "bundle_id"), *sz = cJSON_GetObjectItem(m, "bundle_size");
+        const cJSON *id = cJSON_GetObjectItem(m, "bundle_id"), *sz = cJSON_GetObjectItem(m, "bundle_size"),
+                    *cr = cJSON_GetObjectItem(m, "bundle_crc32");
+        if (cJSON_IsNumber(cr)) crc = (uint32_t)cr->valuedouble;                 // absent: an older hub
         if (cJSON_IsString(id)) want = id32(id->valuestring);
         if (cJSON_IsNumber(sz)) size = (size_t)sz->valuedouble;
         cJSON_Delete(m);
@@ -651,6 +653,10 @@ static void sync_bundle(void)
     size_t got;
     int64_t t0 = ms();
     if (net_stream(url, to_flash, &sk, &got) != ESP_OK || got != size) { ESP_LOGW(TAG, "bundle download failed"); return; }
+    if (crc && store_crc32(slot, STORE_DATA_OFF, size) != crc) {
+        ESP_LOGE(TAG, "bundle failed its check after writing -- not used, will fetch again");
+        return;
+    }
     loop_hdr_t hdr = {0};
     strlcpy(hdr.view, s_key, sizeof(hdr.view));
     hdr.loop_id = want;

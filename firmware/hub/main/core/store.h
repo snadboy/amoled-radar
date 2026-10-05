@@ -32,6 +32,9 @@ int       store_begin(const char *view);                             // erased s
 esp_err_t store_write(int slot, uint32_t off, const void *data, size_t n);
 esp_err_t store_read(int slot, uint32_t off, void *buf, size_t n);
 esp_err_t store_commit(int slot, loop_hdr_t *hdr);
+// CRC32 (zlib's) of `len` bytes at `off`, read back from flash -- checks what was
+// actually written, not just what was received.
+uint32_t  store_crc32(int slot, uint32_t off, size_t len);
 void      store_pin(int slot);               // slot currently on screen: never chosen to erase
 // Views the server currently offers. A slot holding a view NOT in this list is free:
 // without this, a retired view's loop would occupy a slot forever.

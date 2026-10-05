@@ -228,6 +228,7 @@ def handle(h, p, q):
             return h.send(entry["blob"], "application/octet-stream")
         if what == "manifest.json":
             return h.json({"view": view["id"], "bundle_id": entry["id"], "bundle_size": len(entry["blob"]),
+                           "bundle_crc32": entry["crc32"],    # devices verify what they wrote to flash
                            "w": prof[0], "h": prof[1], "r": prof[2], "lat": view["lat"], "lon": view["lon"],
                            "radius_mi": view["radius_mi"], "levels": entry["levels"]})
         try: level = int(q.get("level", "0")) % len(entry["levels"])

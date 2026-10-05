@@ -21,7 +21,7 @@ Endpoints (the old amoled-radar paths stay as aliases until both boards migrate:
   /weather/ui/picker.jpg?hl=&cur=  city picker
   /weather/ui/hold.jpg             "Hold to turn off" pill
 """
-import io, json, os, threading, time
+import io, json, os, threading, time, zlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -301,6 +301,7 @@ def _view(h, vid, rest, g):
             "clear_air_filtered": st.get("clear_air_filtered"),
             "qc_masked": st.get("qc_masked"),       # real frames masked by NOAA QC
             "loop_bin_size": len(st.get("blob") or b""), "tweens_used": st.get("tweens_used"),
+            "loop_crc32": zlib.crc32(st.get("blob") or b""),   # devices verify what they wrote to flash
             "radar_err": st["radar_err"], "status_err": st["status_err"]})
     if rest == "loop.bin":                  # device format (see render.encode_loop)
         if not st.get("blob"): return h.json({"error": "not ready"}, 503)

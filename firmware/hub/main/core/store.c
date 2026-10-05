@@ -3,12 +3,14 @@
 #include <string.h>
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_rom_crc.h"
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 static const char *TAG = "store";
 #define MAGIC   0x52445231u     // "RDR1"
-#define VERSION 6u      // 6 = per-slot write claims (5 could hold a slot two downloads wrote into); 5 = loop height
+#define VERSION 7u      // 7 = CRC-verified writes (6 and before could hold corrupt data from two tasks sharing a buffer)
 
 static const esp_partition_t *s_part;
 static size_t s_slot_size;
@@ -134,6 +136,21 @@ esp_err_t store_commit(int slot, loop_hdr_t *hdr)
     s_wr[slot] = false;
     xSemaphoreGive(s_mx);
     return e;
+}
+
+uint32_t store_crc32(int slot, uint32_t off, size_t len)
+{
+    uint8_t *buf = malloc(4096);
+    uint32_t crc = 0;
+    if (!buf) return 0;
+    for (size_t done = 0; done < len; ) {
+        size_t n = len - done < 4096 ? len - done : 4096;
+        if (store_read(slot, off + done, buf, n) != ESP_OK) { crc = 0; break; }
+        crc = esp_rom_crc32_le(crc, buf, n);
+        done += n;
+    }
+    free(buf);
+    return crc;
 }
 
 const uint8_t *store_map(int slot)

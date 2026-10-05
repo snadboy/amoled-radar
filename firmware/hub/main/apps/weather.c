@@ -85,26 +85,28 @@ static esp_err_t to_flash(void *ctx, const uint8_t *d, size_t n)
     return e;
 }
 
-static bool manifest(int vi, uint32_t *loop_id, size_t *size)
+static bool manifest(int vi, uint32_t *loop_id, size_t *size, uint32_t *crc)
 {
     char url[URL_MAX]; uint8_t *js; size_t len;
     snprintf(url, sizeof(url), "%s/weather/%s/manifest.json?%s", hub_url(), s_views[vi].id, s_prof);
     if (net_get(url, &js, &len, 64 * 1024) != ESP_OK) return false;
     cJSON *m = cJSON_Parse((char *)js);
     free(js);
-    const cJSON *lid = cJSON_GetObjectItem(m, "loop_id"), *bs = cJSON_GetObjectItem(m, "loop_bin_size");
+    const cJSON *lid = cJSON_GetObjectItem(m, "loop_id"), *bs = cJSON_GetObjectItem(m, "loop_bin_size"),
+                *cr = cJSON_GetObjectItem(m, "loop_crc32");
     bool ok = cJSON_IsNumber(lid) && lid->valuedouble > 0;
     if (ok) *loop_id = (uint32_t)lid->valuedouble;
     if (size) *size = cJSON_IsNumber(bs) ? (size_t)bs->valuedouble : 0;
+    if (crc) *crc = cJSON_IsNumber(cr) ? (uint32_t)cr->valuedouble : 0;     // 0: an older hub, no check
     cJSON_Delete(m);
     return ok;
 }
 
 static void sync_view(int vi)
 {
-    char key[16]; uint32_t loop_id; size_t size;
+    char key[16]; uint32_t loop_id, crc; size_t size;
     key_of(vi, key);
-    if (!manifest(vi, &loop_id, &size)) return;
+    if (!manifest(vi, &loop_id, &size, &crc)) return;
     loop_hdr_t cur; int cs;
     if (store_get(key, &cur, &cs) && cur.loop_id == loop_id) return;
     if (!size || size > store_slot_capacity()) { ESP_LOGW(TAG, "%s: loop size %u unusable", key, (unsigned)size); return; }
@@ -116,12 +118,16 @@ static void sync_view(int vi)
     int64_t t0 = ms();
     snprintf(url, sizeof(url), "%s/weather/%s/loop.bin?%s", hub_url(), s_views[vi].id, s_prof);
     if (net_stream(url, to_flash, &sk, &got) != ESP_OK) { ESP_LOGW(TAG, "%s loop download failed; retry later", key); return; }
+    if (got != size || (crc && store_crc32(slot, STORE_DATA_OFF, size) != crc)) {
+        ESP_LOGE(TAG, "%s: loop failed its check after writing (%u of %u bytes) -- not used", key, (unsigned)got, (unsigned)size);
+        return;
+    }
     loop_hdr_t h = {0};
     strlcpy(h.view, key, sizeof(h.view));
     h.loop_id = loop_id;
     if (rdl_parse(slot, &h) != ESP_OK) return;
     uint32_t after;                                        // loop rebuilt mid-download? discard
-    if (!manifest(vi, &after, NULL) || after != loop_id) { ESP_LOGW(TAG, "%s changed during download", key); return; }
+    if (!manifest(vi, &after, NULL, NULL) || after != loop_id) { ESP_LOGW(TAG, "%s changed during download", key); return; }
     store_commit(slot, &h);
     ESP_LOGI(TAG, "%s: loop %lu cached in slot %d (%u frames, %u KB, %lld ms)", key, (unsigned long)loop_id,
              slot, h.nframes, (unsigned)(got / 1024), ms() - t0);
@@ -137,7 +143,14 @@ static void sync_task(void *arg)
             s_view_changed = false; sync_view(cur); checked[cur] = ms();
         } else {
             for (int v = 0; v < s_nviews; v++)              // one background view per pass
-                if (v != cur && (!checked[v] || now - checked[v] > CHECK_BG_MS)) { sync_view(v); checked[v] = ms(); break; }
+                if (v != cur && (!checked[v] || now - checked[v] > CHECK_BG_MS)) {
+                    sync_view(v); checked[v] = ms();
+                    char key[16]; loop_hdr_t h; int sl;
+                    key_of(v, key);
+                    // nothing cached yet (e.g. the hub is still building it): retry in a minute, not 2 h
+                    if (!store_get(key, &h, &sl)) checked[v] = ms() - CHECK_BG_MS + CHECK_CUR_MS;
+                    break;
+                }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

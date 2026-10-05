@@ -19,7 +19,7 @@ Bundle format ABN1 (little-endian), served as /aircraft/<view>/bundle.bin:
                             u32 offset, u32 length
   ... pixels: RGB565 little-endian (LVGL native), w*h*2 bytes per level
 """
-import hashlib, json, math, os, struct, threading, time, urllib.parse, urllib.request
+import hashlib, json, math, os, struct, threading, time, urllib.parse, urllib.request, zlib
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -236,7 +236,7 @@ class Bundles:
                 img, mpp = render_level(self.cache, view, towns, rng, w, h, r)
                 levels.append((rng, mpp, img))
             blob = encode_bundle(view, levels, w, h)
-            entry = {"blob": blob, "id": hashlib.sha256(blob).hexdigest()[:16],
+            entry = {"blob": blob, "id": hashlib.sha256(blob).hexdigest()[:16], "crc32": zlib.crc32(blob),
                      "levels": [{"range_mi": rng, "mpp": mpp, "rings": list(rings_for(rng))} for rng, mpp, _ in levels],
                      "images": [img for _, _, img in levels]}
             with self.lock: self.mem[key] = entry
