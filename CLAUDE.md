@@ -19,16 +19,21 @@ One server for every small display: weather radar today, aircraft next (ported f
 - **Step 4 DONE**: weather app (`apps/weather.c` + `rdl.c` + `jpeg_draw.c`; `app_t.raw` keeps LVGL
   paused). Server loop budget 2.06 MB. Both boards run the hub firmware; all buttons, touch info
   and app switching verified by the owner 2026-10-04.
-- **Bedrock deploy IN PROGRESS (2026-10-04):** Dockhand git stack 31 `amoled-radar` (env 11,
-  docker-homelab `amoled-radar/docker-compose.yml`, manual sync) now specifies image
-  `display-hub:8cd4601`, container `display-hub`, port 8098, VIP `displays` (docker-homelab
-  34beb3a). Stack/service/volume keep the amoled-radar name on purpose. Bedrock's volume
-  `amoled-radar_amoled-radar-cache` is pre-staged with devices.json (names) and firmware
-  32d42ef-10042116 (points at bedrock) on root + `hub` channels, plus `radar-backup`.
-  Waiting on the owner: add stack vars OPENSKY_CLIENT_ID/SECRET, AIR_LAT/AIR_LON in Dockhand
-  (a DB write was blocked as a secret-store write) and Deploy. Then: publish the same build on
-  radar-dev so both boards OTA over to bedrock, verify, retire radar-dev (sdevs :8098,
-  cache ~/radar-dev-cache). Until then the boards use radar-dev (their builds point at .220).
+- **Bedrock deploy DONE (2026-10-04):** Dockhand git stack 31 `amoled-radar` (env 11, docker-homelab
+  `amoled-radar/docker-compose.yml`, manual sync) runs image `display-hub:8cd4601` as container
+  `display-hub` on 192.168.86.135:8098; humans: https://displays.swallow-spectrum.ts.net. Stack,
+  service and volume keep the amoled-radar name on purpose (in-place replace, cache kept).
+  Stack variables (Dockhand): HASS_SERVER/TOKEN, OPENSKY_CLIENT_ID/SECRET, AIR_LAT/AIR_LON.
+  Firmware is published in bedrock's volume `amoled-radar_amoled-radar-cache`, `firmware/` (root
+  channel) and `firmware/hub/` (both boards' channel); `firmware/radar-backup/` = the old radar fw.
+  Both boards run 32d42ef-10042116 (points at bedrock). `radar-dev` on sdevs is retired;
+  `~/radar-dev-cache` kept as a backup.
+  **To ship a server change:** push -> CI builds ghcr.io/snadboy/display-hub:<sha> -> bump the tag
+  in docker-homelab -> Deploy in Dockhand. Pending for the next bump: 70e7546 (empty AIR_* = default).
+  **To ship firmware:** `./build.sh`, then copy build/display_hub.bin + version.txt into bedrock's
+  volume `firmware/hub/` (boards check every 6 h, and 90 s after boot).
+- **Next:** step 5 (device profiles, then a bigger screen); archive ~/projects/git/opensky-amoled
+  (local-only, fully ported).
 - Builds: `./build.sh` (bedrock, the default) or `HUB_SERVER_URL=http://192.168.86.220:8098
   ./build.sh` (dev). Flash by SERIAL, never by ttyACM number (both boards are on sdevs):
   `PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
