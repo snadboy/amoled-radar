@@ -89,7 +89,7 @@ static bool live(const char *view)
     return false;
 }
 
-int store_begin(const char *view)
+int store_begin(const char *view, bool urgent)
 {
     xSemaphoreTake(s_mx, portMAX_DELAY);
     for (int i = 0; i < STORE_SLOTS; i++)       // this key's earlier, abandoned download
@@ -103,6 +103,14 @@ int store_begin(const char *view)
         if (s_valid[i]) current = live(s_hdr[i].view) && newest(s_hdr[i].view) == i;
         if (!current) pick = i;
     }
+    for (int i = 0; i < STORE_SLOTS && pick < 0 && urgent; i++)    // evict, oldest first
+        if (i != s_pinned && !s_wr[i] && !s_mp[i] && s_valid[i]) {
+            int best = i;
+            for (int j = i + 1; j < STORE_SLOTS; j++)
+                if (j != s_pinned && !s_wr[j] && !s_mp[j] && s_valid[j] && s_hdr[j].seq < s_hdr[best].seq) best = j;
+            ESP_LOGI(TAG, "no free slot for %s: evicting %s from slot %d", view, s_hdr[best].view, best);
+            pick = best;
+        }
     if (pick >= 0) { s_valid[pick] = false; s_wr[pick] = true; strlcpy(s_wr_view[pick], view, sizeof(s_wr_view[0])); }
     xSemaphoreGive(s_mx);
     if (pick < 0) return -1;

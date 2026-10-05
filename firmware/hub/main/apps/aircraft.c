@@ -646,7 +646,7 @@ static void sync_bundle(void)
     }
     if (!want) return;
     if (!size || size > store_slot_capacity()) { ESP_LOGW(TAG, "bundle size %u unusable", (unsigned)size); return; }
-    int slot = store_begin(s_key);
+    int slot = store_begin(s_key, true);
     if (slot < 0) { ESP_LOGW(TAG, "no free slot for the bundle"); return; }
     snprintf(url, sizeof(url), "%s/aircraft/%s/bundle.bin?w=%d&h=%d&r=%d", hub_url(), s_view, BOARD.w, BOARD.h, BOARD.corner_r);
     sink_t sk = { .slot = slot, .off = STORE_DATA_OFF };

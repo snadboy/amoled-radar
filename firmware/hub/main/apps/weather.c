@@ -110,7 +110,7 @@ static void sync_view(int vi)
     if (store_get(key, &cur, &cs) && cur.loop_id == loop_id) return;
     if (!size || size > store_slot_capacity()) { ESP_LOGW(TAG, "%s: loop size %u unusable", key, (unsigned)size); return; }
 
-    int slot = store_begin(key);
+    int slot = store_begin(key, vi == s_cur);
     if (slot < 0) { ESP_LOGW(TAG, "no free slot for %s yet", key); return; }
     char url[URL_MAX]; size_t got;
     sink_t sk = { .slot = slot, .off = STORE_DATA_OFF };

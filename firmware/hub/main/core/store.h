@@ -33,7 +33,10 @@ typedef struct {
 esp_err_t store_init(void);
 bool      store_get(const char *view, loop_hdr_t *hdr, int *slot);   // newest complete loop
 size_t    store_slot_capacity(void);                                 // bytes for frame data
-int       store_begin(const char *view);                             // erased slot, or -1 if none free
+// Erased slot to download into, or -1 if none is free. urgent (what's on screen now): with
+// no free slot, take the least recently refreshed bundle that isn't on screen or being
+// written -- on 4 MB boards (3 slots) the views can outnumber the slots.
+int       store_begin(const char *view, bool urgent);
 esp_err_t store_write(int slot, uint32_t off, const void *data, size_t n);
 esp_err_t store_read(int slot, uint32_t off, void *buf, size_t n);
 esp_err_t store_commit(int slot, loop_hdr_t *hdr);

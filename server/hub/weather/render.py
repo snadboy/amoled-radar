@@ -418,6 +418,7 @@ def progress_bar(frame, frac, left, right, ox=0, oy=0, g=None):
     m = 12
     if g is not None and g.round:                  # labels inside the circle at this row
         f = fnt(11)
+        left, right = (t.replace(" AM", "").replace(" PM", "") for t in (left, right))
         m = int(W / 2 - chord(g, y) + 8)
     d.text((m + jx, y), left, font=f, fill=(150, 160, 172, 235), anchor="lm",
            stroke_width=2, stroke_fill=(0, 0, 0, 255))
