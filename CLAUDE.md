@@ -99,6 +99,22 @@ One server for every small display: weather radar today, aircraft next (ported f
   Verified in HA 2026-10-05: devices `Display 1/2` + `Display Hub`; select.display_2_app switched
   the display both ways in < 10 s. Admin Test buttons now test the typed values (blank = saved),
   hub f1ac99a (docker-homelab 9f0287a).
+- **Third board (2026-10-05): "DeskRadar" build** -- classic ESP32-D0WD-V3 rev 3.1 devkit (4 MB
+  flash, no PSRAM, CH340 1a86:7523, MAC b4:bf:e9:60:60:fc, hub name "Display 60FC") + 1.28" round
+  GC9A01 240x240 (github.com/arvis91/deskradar; pins SCL 18, MOSI 23, RST 4, DC 2, CS 15, BLK 21
+  or 3.3 V). Original Arduino firmware backed up (verify_flash OK) to
+  `/mnt/shareables/firmware-backups/deskradar-b4bfe96060fc-20261005.bin`.
+  `BOARD=esp32 ./build.sh` -> `boards/deskradar_esp32.c`, `partitions_4mb.csv` (2 x 1.25 MB app,
+  1.375 MB frames = 3 slots of 464 KB; app is 1.23 MB at -Os, only 6% headroom), OTA channel
+  `hub-esp32`, ROM TJpgDec. One button: BOOT short = app key (zoom / picker), hold = next app.
+  Flashed on sdevs via `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` (erase_flash first:
+  the Arduino partition table differs), WiFi via Improv over UART0 -- worked first time.
+  Weather on round glass: `Geom.round`, labels kept inside the circle, compact picker, and a
+  per-device **Status strip** setting (`weather.strip`, admin checkbox; default off when
+  r*2 >= min(w,h)) -> profile key suffix `_nostrip`, `&strip=0` on the device's URLs.
+  Hub 99e19ef (docker-homelab bump deployed via the Dockhand API). Unverified on the glass:
+  colour order/inversion and mirror (BGR + invert + mirror X, as Espressif's example), aircraft
+  app layout at 240 round.
 - **Open items:** P4 3.5" board bring-up when it arrives (install page first; chip revision,
   rotation flags unverified); owner to rename the displays and delete the six Dockhand stack
   variables (hub.db has them now); rotate DOCKHAND_API_TOKEN (it was pasted into a chat).
