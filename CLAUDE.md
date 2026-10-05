@@ -32,8 +32,10 @@ One server for every small display: weather radar today, aircraft next (ported f
   in docker-homelab -> Deploy in Dockhand. Pending for the next bump: 70e7546 (empty AIR_* = default).
   **To ship firmware:** `./build.sh`, then copy build/display_hub.bin + version.txt into bedrock's
   volume `firmware/hub/` (boards check every 6 h, and 90 s after boot).
-- **Next:** step 5 (device profiles, then a bigger screen); archive ~/projects/git/opensky-amoled
-  (local-only, fully ported).
+- opensky-amoled archived 2026-10-04: private, read-only https://github.com/snadboy/opensky-amoled
+  (local copy still at ~/projects/git/opensky-amoled). Old amoled-radar images removed from sdevs
+  and bedrock.
+- **Next:** step 5 (device profiles, then a bigger screen).
 - Builds: `./build.sh` (bedrock, the default) or `HUB_SERVER_URL=http://192.168.86.220:8098
   ./build.sh` (dev). Flash by SERIAL, never by ttyACM number (both boards are on sdevs):
   `PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
