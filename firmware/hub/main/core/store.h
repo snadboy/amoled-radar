@@ -9,12 +9,7 @@
 // LAST, so a bundle is either complete or invisible. Keys are namespaced by app
 // ("w:geneva", "a:home"). Weather loops use the frame table; other bundles keep
 // their own index inside the data (e.g. ABN1) and set nframes to their section count.
-#include "sdkconfig.h"
-#if CONFIG_IDF_TARGET_ESP32
-#define STORE_SLOTS       3     // 4 MB boards: ~460 KB each (a 240x240 four-level ABN1 just fits)
-#else
 #define STORE_SLOTS       6
-#endif
 #define STORE_MAX_FRAMES  96
 #define STORE_DATA_OFF    4096
 
@@ -35,7 +30,7 @@ bool      store_get(const char *view, loop_hdr_t *hdr, int *slot);   // newest c
 size_t    store_slot_capacity(void);                                 // bytes for frame data
 // Erased slot to download into, or -1 if none is free. urgent (what's on screen now): with
 // no free slot, take the least recently refreshed bundle that isn't on screen or being
-// written -- on 4 MB boards (3 slots) the views can outnumber the slots.
+// written (the views can outnumber the slots).
 int       store_begin(const char *view, bool urgent);
 esp_err_t store_write(int slot, uint32_t off, const void *data, size_t n);
 esp_err_t store_read(int slot, uint32_t off, void *buf, size_t n);

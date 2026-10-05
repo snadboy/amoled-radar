@@ -1,4 +1,4 @@
-// JPEG -> panel, one MCU row at a time, using the TJpgDec decoder in the chip ROM (C6, classic ESP32).
+// JPEG -> panel, one MCU row at a time, using the TJpgDec decoder in the C6 ROM.
 //
 // The ROM decoder hands back RGB888 blocks (JD_FORMAT 0) in raster order. Blocks
 // are converted to big-endian RGB565 into a strip buffer; when a block ends the
@@ -8,12 +8,7 @@
 
 #include <string.h>
 #include "board.h"
-#include "sdkconfig.h"
-#if CONFIG_IDF_TARGET_ESP32
-#include "esp32/rom/tjpgd.h"
-#else
 #include "esp32c6/rom/tjpgd.h"
-#endif
 #include "esp_log.h"
 #include "store.h"
 

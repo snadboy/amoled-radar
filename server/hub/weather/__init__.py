@@ -42,10 +42,6 @@ TWEEN_MODE = os.environ.get("RADAR_TWEEN_MODE", "motion")
 # Largest device-format loop a board's flash slot holds. Hub firmware: 6 slots, 2,068,480
 # bytes of data each (reported as "slot" in /device/hello); the radar firmware's were bigger.
 LOOP_BUDGET = int(os.environ.get("RADAR_LOOP_BUDGET", str(2060000)))
-
-def _budget(g):
-    # 4 MB boards (classic ESP32, 240x240) have 3 slots of 475,136 bytes (hello's "slot")
-    return LOOP_BUDGET if g.w * g.h > 240 * 240 else 470000
 # Clear-air echo (RainViewer's faint tan/grey band) is filtered on city views only
 # when the city is at least this warm. Snow can't reach the ground at 40 F, so the
 # band can't be snow then; below it, the band is kept in case it is light snow.
@@ -234,7 +230,7 @@ def build_radar(city, maps, g):
         span = float(t_last - t_first) or 1.0
         imgs = [compose(layer, (t - t_first) / span, left, right) for layer, t in zip(seq, times)]
         blob = R.encode_loop(compose(None, 0.0, left, right), imgs, keys)
-        if len(blob) <= _budget(g) or tw == 0:
+        if len(blob) <= LOOP_BUDGET or tw == 0:
             break
         print("[radar] %s %s loop %.1f MB with %d in-betweens > budget, trying fewer" % (city["id"], g.key, len(blob) / 1e6, tw), flush=True)
     out = [_jpeg(im) for im in imgs]

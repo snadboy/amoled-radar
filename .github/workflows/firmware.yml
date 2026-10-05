@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        board: [c6, p4, esp32]
+        board: [c6, p4]
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +32,7 @@ jobs:
         working-directory: firmware/hub
         run: |
           B=build-${{ matrix.board }}
-          case ${{ matrix.board }} in p4) CHIP=esp32p4 ;; esp32) CHIP=esp32 ;; *) CHIP=esp32c6 ;; esac
+          case ${{ matrix.board }} in p4) CHIP=esp32p4 ;; *) CHIP=esp32c6 ;; esac
           mkdir -p dist
           cp $B/display_hub.bin dist/display-hub-${{ matrix.board }}.bin
           # one image from offset 0 (bootloader, partition table, OTA data, app) for the install page

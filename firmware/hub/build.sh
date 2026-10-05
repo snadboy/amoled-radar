@@ -4,7 +4,6 @@
 # per target; BOARD picks it (default c6):
 #   ./build.sh                                   C6 AMOLED 2.16", hub = bedrock (the default)
 #   BOARD=p4 ./build.sh                          P4 LCD 3.5"
-#   BOARD=esp32 ./build.sh                       classic ESP32 + round GC9A01 (DeskRadar build)
 #   HUB_SERVER_URL=http://192.168.86.220:8099 ./build.sh   any board, another hub
 #   DEV_WIFI=1 ./build.sh                        developer build: also seeds WiFi from the
 #                                                shareables .env (RADAR_WIFI_SSID/PASSWORD)
@@ -44,8 +43,7 @@ BOARD=${BOARD:-c6}
 case "$BOARD" in
   c6) TARGET=esp32c6 ;;
   p4) TARGET=esp32p4 ;;
-  esp32) TARGET=esp32 ;;
-  *) echo "BOARD must be c6, p4 or esp32" >&2; exit 1 ;;
+  *) echo "BOARD must be c6 or p4" >&2; exit 1 ;;
 esac
 B=build-$BOARD; SDK=sdkconfig.$BOARD
 rm -f $SDK                # regenerate from defaults so secrets/server changes take effect

@@ -120,8 +120,6 @@ static void rpc(const uint8_t *d, int len)
     } else if (cmd == C_INFO) {
 #if CONFIG_IDF_TARGET_ESP32P4
         const char *chip = "ESP32-P4";
-#elif CONFIG_IDF_TARGET_ESP32
-        const char *chip = "ESP32";
 #else
         const char *chip = "ESP32-C6";
 #endif

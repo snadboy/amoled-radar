@@ -99,26 +99,15 @@ One server for every small display: weather radar today, aircraft next (ported f
   Verified in HA 2026-10-05: devices `Display 1/2` + `Display Hub`; select.display_2_app switched
   the display both ways in < 10 s. Admin Test buttons now test the typed values (blank = saved),
   hub f1ac99a (docker-homelab 9f0287a).
-- **Third board (2026-10-05): "DeskRadar" build** -- classic ESP32-D0WD-V3 rev 3.1 devkit (4 MB
-  flash, no PSRAM, CH340 1a86:7523, MAC b4:bf:e9:60:60:fc, hub name "Display 60FC") + 1.28" round
-  GC9A01 240x240 (github.com/arvis91/deskradar; pins SCL 18, MOSI 23, RST 4, DC 2, CS 15, BLK 21
-  or 3.3 V). Original Arduino firmware backed up (verify_flash OK) to
-  `/mnt/shareables/firmware-backups/deskradar-b4bfe96060fc-20261005.bin`.
-  `BOARD=esp32 ./build.sh` -> `boards/deskradar_esp32.c`, `partitions_4mb.csv` (2 x 1.25 MB app,
-  1.375 MB frames = 3 slots of 464 KB; app is 1.23 MB at -Os, only 6% headroom), OTA channel
-  `hub-esp32`, ROM TJpgDec. One button: BOOT short = app key (zoom / picker), hold = next app.
-  Flashed on sdevs via `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` (erase_flash first:
-  the Arduino partition table differs), WiFi via Improv over UART0 -- worked first time.
-  Weather on round glass: `Geom.round`, labels kept inside the circle, compact picker, and a
-  per-device **Status strip** setting (`weather.strip`, admin checkbox; default off when
-  r*2 >= min(w,h)) -> profile key suffix `_nostrip`, `&strip=0` on the device's URLs.
-  Hub 99e19ef (docker-homelab bump deployed via the Dockhand API). Unverified on the glass:
-  colour order/inversion and mirror (BGR + invert + mirror X, as Espressif's example), aircraft
-  app layout at 240 round.
-  3-slot store: `store_begin(key, urgent)` -- with no free slot, the view ON SCREEN may evict
-  the oldest unmapped bundle (weather only while active; otherwise the round board kept
-  playing its old strip-height loops).
-- **Panning (2026-10-05, hub 63a5ea4, firmware d701880 on all three displays via OTA):**
+- **DeskRadar board: tried and DROPPED (2026-10-05).** A classic ESP32 devkit (4 MB, CH340, MAC
+  b4:bf:e9:60:60:fc) + 1.28" round GC9A01 with NO touch and one button ran the hub firmware for
+  a day (commit 99e19ef..67d315b had `BOARD=esp32`), but the owner found it too limited (can't
+  swipe). Removed in the next commit; its original Arduino firmware was restored from
+  `/mnt/shareables/firmware-backups/deskradar-b4bfe96060fc-20261005.bin` (verify OK) and the
+  hub forgot it. Kept from that work: the per-device **Status strip** setting (`weather.strip`,
+  `&strip=0`, profile key `_nostrip`), round-glass layout in render.py (`Geom.round`), and
+  `store_begin(key, urgent)` (the view on screen may evict the oldest unmapped bundle).
+- **Panning (2026-10-05, hub 63a5ea4, firmware d701880 via OTA):**
   view ids `<view>@<dx>,<dy>` (50 mi steps east/north; helpers `core.parse_pan/pan_label/
   pan_centre`). Weather: up to 3 steps, rendered on demand per profile on `pan_loop` (~20 s),
   kept 15 min after the last request; offset pill burned into frames (tap the top 80 px =
@@ -131,7 +120,7 @@ One server for every small display: weather radar today, aircraft next (ported f
   HA: per-display Pan select (Centred + 8 directions at 50 mi). Store keys for pans:
   `w:~<vi><dx+'d'><dy+'d'>`, `a:~<dx><dy><view>`. Verified via HA on Display 60FC (weather
   and aircraft); swipes on the C6 touch boards not yet tried by the owner.
-- **Later 2026-10-05 (hub 67d315b, firmware 67d315b on all three):**
+- **Later 2026-10-05 (hub 67d315b, firmware 67d315b):**
   * Aircraft per-display settings: `labels_mi` (callsign/alt labels at that zoom or closer;
     0 never, 999 always; default 5 small / 10 large; a tap on empty map flips until next
     zoom), `trail_s` (unselected trails 0-240 s, one point per ~30 s poll; default 0 small /

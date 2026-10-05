@@ -18,8 +18,7 @@ from . import core
 REPO = os.environ.get("HUB_FIRMWARE_REPO", "snadboy/display-hub")
 UA = "snadboy-display-hub/1.0"
 BOARDS = {"c6": {"channel": "hub", "chip": "ESP32-C6", "name": "2.16\" AMOLED (ESP32-C6)"},
-          "p4": {"channel": "hub-p4", "chip": "ESP32-P4", "name": "3.5\" LCD (ESP32-P4)"},
-          "esp32": {"channel": "hub-esp32", "chip": "ESP32", "name": "1.28\" round LCD (ESP32, DeskRadar build)"}}
+          "p4": {"channel": "hub-p4", "chip": "ESP32-P4", "name": "3.5\" LCD (ESP32-P4)"}}
 _TAG = re.compile(r"^firmware-[0-9a-f]{7}$")
 
 _lock = threading.Lock()

@@ -1,11 +1,8 @@
-# One firmware, one board per target: the board file and the JPEG decoder (C6/ESP32 ROM
-# vs P4 hardware) follow IDF_TARGET.
+# One firmware, one board per target: the board file and the JPEG decoder (C6 ROM vs
+# P4 hardware) follow IDF_TARGET.
 if(IDF_TARGET STREQUAL "esp32p4")
     set(board_srcs "boards/ws_p4_35.c" "apps/jpeg_draw_p4.c")
     set(board_reqs esp_driver_ledc esp_driver_jpeg esp_driver_uart)
-elseif(IDF_TARGET STREQUAL "esp32")
-    set(board_srcs "boards/deskradar_esp32.c" "apps/jpeg_draw.c")
-    set(board_reqs esp_driver_ledc esp_driver_uart)
 else()
     set(board_srcs "boards/ws_c6_216.c" "apps/jpeg_draw.c")
     set(board_reqs esp_driver_usb_serial_jtag)
