@@ -37,7 +37,6 @@ static const char *TAG = "aircraft";
 #define MAX_AIRCRAFT            200
 #define MAX_LEVELS              4
 #define TRAIL_POINTS            8      // one per poll; only the selected plane draws them all
-#define TRAIL_POINTS_UNSELECTED 2      // about the last minute
 #define MAX_EXTRAPOLATE_S       60
 #define STATES_MS               5000
 #define PIXEL_SHIFT_S           180
@@ -118,7 +117,9 @@ static track_t s_tracks[MAX_AIRCRAFT];
 static int s_track_count;
 static uint32_t s_server_time;
 static int64_t s_batch_ms;
-static bool s_show_labels = true;
+static bool s_labels_flip;                // a tap on empty map flips the zoom rule until the next zoom
+static int s_labels_mi = 999;             // labels at this zoom (mi) or closer; 0 = never (hub setting)
+static int s_trail_pts = 2;               // unselected planes' trail, in polls (~30 s each); hub setting
 static uint32_t s_selected;
 static volatile bool s_active, s_screen_on = true;
 static TaskHandle_t s_net;
@@ -339,6 +340,7 @@ static void radar_draw_cb(lv_event_t *e)
     int32_t ox = rc.x1, oy = rc.y1;
 
     track_t *sel = NULL;
+    bool labels = s_nlevels && (s_levels[s_level].range_mi <= s_labels_mi) != s_labels_flip;
     for (int i = 0; i < s_track_count; i++) {
         track_t *t = &s_tracks[i];
         double lat, lon;
@@ -356,7 +358,7 @@ static void radar_draw_cb(lv_event_t *e)
         // Breadcrumbs, oldest first, ending at the current position.
         trail.color = col;
         trail.opa = selected ? LV_OPA_80 : LV_OPA_30;
-        int shown = selected ? t->trail_n : (t->trail_n < TRAIL_POINTS_UNSELECTED ? t->trail_n : TRAIL_POINTS_UNSELECTED);
+        int shown = selected ? t->trail_n : (t->trail_n < s_trail_pts ? t->trail_n : s_trail_pts);
         int32_t px = 0, py = 0;
         for (int k = t->trail_n - shown; k < t->trail_n; k++) {
             int idx = (t->trail_head + TRAIL_POINTS - t->trail_n + k) % TRAIL_POINTS;
@@ -369,14 +371,14 @@ static void radar_draw_cb(lv_event_t *e)
             }
             px = qx; py = qy;
         }
-        if (t->trail_n) {
+        if (shown) {
             trail.p1 = (lv_point_precise_t){ px + ox, py + oy };
             trail.p2 = (lv_point_precise_t){ x + ox, y + oy };
             lv_draw_line(layer, &trail);
         }
 
         draw_plane(layer, x + ox, y + oy, t->a.track_deg, category_scale(t->a.category), col);
-        if (s_show_labels || selected) draw_label(layer, t, x, y, ox, oy, selected);
+        if (labels || selected) draw_label(layer, t, x, y, ox, oy, selected);
     }
 
     if (sel) {
@@ -478,6 +480,7 @@ static void set_level(int level)
 {
     if (!s_nlevels) return;
     s_level = level % s_nlevels;
+    s_labels_flip = false;
     lv_image_set_src(s_map, &s_levels[s_level].img);
     lv_label_set_text_fmt(s_range_label, "%d mi", s_levels[s_level].range_mi);
     lv_obj_invalidate(s_radar);
@@ -529,7 +532,7 @@ static void radar_click_cb(lv_event_t *e)
     }
     if (best >= 0) s_selected = s_tracks[best].a.icao;
     else if (s_selected) s_selected = 0;
-    else s_show_labels = !s_show_labels;
+    else s_labels_flip = !s_labels_flip;
     update_panel();
     lv_obj_invalidate(s_radar);
 }
@@ -794,8 +797,9 @@ static void fetch_states(void)
     s_batch.count = count;
     s_batch.server_time = t;
     s_batch.ready = true;
-    static bool logged;
-    if (!logged) { logged = true; ESP_LOGI(TAG, "first states: seq %lu, %d aircraft, hub status %d", (unsigned long)seq, count, s_status); }
+    static char logged[24];                // first states for each view (start, every pan)
+    vid_of(s_dx, s_dy, id);
+    if (strcmp(logged, id)) { strlcpy(logged, id, sizeof(logged)); ESP_LOGI(TAG, "first states for %s: seq %lu, %d aircraft, hub status %d", id, (unsigned long)seq, count, s_status); }
 }
 
 static void str_item(char *dst, size_t n, const cJSON *o, const char *key)
@@ -888,8 +892,15 @@ static void build_ui(void)
 
     s_msg = lv_label_create(s_root);
     lv_label_set_text(s_msg, "Loading map...");
-    lv_obj_set_style_text_font(s_msg, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(s_msg, lv_color_hex(0x7f8a94), 0);
+    lv_obj_set_style_text_font(s_msg, &lv_font_montserrat_18, 0);   // an amber pill, like weather's:
+    lv_obj_set_style_text_color(s_msg, lv_color_hex(0xe7ebf0), 0); // plain grey text got lost on the map
+    lv_obj_set_style_bg_color(s_msg, lv_color_hex(0x101418), 0);
+    lv_obj_set_style_bg_opa(s_msg, LV_OPA_90, 0);
+    lv_obj_set_style_border_color(s_msg, lv_color_hex(0xffb703), 0);
+    lv_obj_set_style_border_width(s_msg, 2, 0);
+    lv_obj_set_style_radius(s_msg, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(s_msg, 18, 0);
+    lv_obj_set_style_pad_ver(s_msg, 10, 0);
     lv_obj_center(s_msg);
 
     s_radar = lv_obj_create(s_root);
@@ -989,6 +1000,10 @@ static void app_init(const cJSON *views)
                 *sl = cJSON_GetObjectItem(v, "start_level");
     if (cJSON_IsString(id)) strlcpy(s_view, id->valuestring, sizeof(s_view));
     if (cJSON_IsNumber(sl) && sl->valueint >= 0 && sl->valueint < MAX_LEVELS) s_level = sl->valueint;   // the hub's starting zoom
+    const cJSON *lm = cJSON_GetObjectItem(v, "labels_mi");
+    if (cJSON_IsNumber(lm)) s_labels_mi = lm->valueint;
+    const cJSON *tr = cJSON_GetObjectItem(v, "trail_s");      // the hub polls OpenSky every ~30 s
+    if (cJSON_IsNumber(tr)) s_trail_pts = tr->valueint / 30 > TRAIL_POINTS ? TRAIL_POINTS : tr->valueint / 30;
     s_info_mx = xSemaphoreCreateMutex();
     ui_lock(0);
     build_ui();

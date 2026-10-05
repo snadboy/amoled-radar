@@ -292,6 +292,9 @@ function renderEditor() {
       <fieldset><legend>Aircraft</legend>
         <div class="row"><div><label>View</label><select data-k="view">${S.views.map(v => `<option value="${v.id}" ${d.aircraft.view == v.id ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></div>
         <div><label>Starting zoom</label><select data-k="level">${levels.map((l, i) => `<option value="${i}" ${d.aircraft.start_level == i ? "selected" : ""}>${l} mi</option>`).join("")}</select></div></div>
+        <label>Flight labels (callsign, altitude)</label><select data-k="labels">${[[0, "Never"], [5, "At 5 mi zoom or closer"], [10, "At 10 mi or closer"], [25, "At 25 mi or closer"], [50, "At 50 mi or closer"], [999, "Always"]].map(([v, t]) => `<option value="${v}" ${d.aircraft.labels_mi == v ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <label>Trails behind planes</label><select data-k="trail">${[[0, "Off"], [30, "30 s"], [60, "1 min"], [120, "2 min"], [240, "4 min"]].map(([v, t]) => `<option value="${v}" ${d.aircraft.trail_s == v ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <p class="hint">A tapped plane always shows its label, details and whole trail; tapping empty map flips labels until the next zoom.</p>
       </fieldset>
       <fieldset><legend>Screen (this room)</legend>
         <label>Mode</label><select data-s="mode">${["auto", "on", "off"].map(m => `<option value="${m}" ${d.screen.mode == m ? "selected" : ""}>${{auto: "Auto: follow the room's sensors", on: "Always on", off: "Off"}[m]}</option>`).join("")}</select>
@@ -327,7 +330,7 @@ async function saveDevice() {                     // true when saved
     apps: [...c.querySelectorAll("[data-app]")].filter(x => x.checked).map(x => x.dataset.app),
     start_app: q("[data-k=start_app]").value,
     weather: {places: [...c.querySelectorAll("[data-place]")].filter(x => x.checked).map(x => x.dataset.place), start: q("[data-k=wstart]").value, strip: q("[data-k=wstrip]").checked},
-    aircraft: {view: q("[data-k=view]").value, start_level: +q("[data-k=level]").value},
+    aircraft: {view: q("[data-k=view]").value, start_level: +q("[data-k=level]").value, labels_mi: +q("[data-k=labels]").value, trail_s: +q("[data-k=trail]").value},
     screen: Object.fromEntries([...c.querySelectorAll("[data-s]")].map(x => [x.dataset.s, x.value])),
   };
   $("ed_save").disabled = true; msg.className = "msg"; msg.textContent = "saving…";

@@ -197,6 +197,9 @@ def device(dev_id):
     view = a.get("view") if a.get("view") in av else (av[0] if av else None)
     levels = (air_view(view) or {}).get("levels", [50])
     pr = d.get("profile", {})
+    try: small = int(pr.get("w", 480)) < 320
+    except ValueError: small = False
+    small_labels, small_trail = (5, 0) if small else (10, 60)
     try: is_round = int(pr.get("r", 0)) * 2 >= min(int(pr.get("w", 480)), int(pr.get("h", 480)))
     except ValueError: is_round = False
     return {
@@ -209,7 +212,12 @@ def device(dev_id):
                     # the strip under the radar (temperature, humidity, city, time); off by
                     # default on round glass, where it would eat the bottom of the circle
                     "strip": bool(w["strip"]) if "strip" in w else not is_round},
-        "aircraft": {"view": view, "start_level": max(0, min(int(a.get("start_level", 0)), len(levels) - 1))},
+        "aircraft": {"view": view, "start_level": max(0, min(int(a.get("start_level", 0)), len(levels) - 1)),
+                     # callsign + altitude beside each plane only at this zoom (mi) or closer;
+                     # 0 = never (a tapped plane still gets its label and details)
+                     "labels_mi": int(a["labels_mi"]) if str(a.get("labels_mi", "")).isdigit() else small_labels,
+                     # trail behind each unselected plane, seconds (0 = none; a tapped plane shows its whole trail)
+                     "trail_s": int(a["trail_s"]) if str(a.get("trail_s", "")).isdigit() else small_trail},
         "screen": dict(default_screen(), **d.get("screen", {})),
         "profile": d.get("profile", {}),
     }

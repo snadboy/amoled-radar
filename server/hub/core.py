@@ -94,7 +94,8 @@ def hello_reply(dev, apps):
                                                    for p in map(settings.place, dev["weather"]["places"]) if p]})
         elif app_id == "aircraft" and "aircraft" in by_id:
             v = settings.air_view(dev["aircraft"]["view"])
-            out.append({"id": "aircraft", "views": [by_id["aircraft"].view_summary(v, dev["aircraft"]["start_level"])] if v else []})
+            out.append({"id": "aircraft", "views": [by_id["aircraft"].view_summary(v, dev["aircraft"]["start_level"],
+                                                                                       dev["aircraft"]["labels_mi"], dev["aircraft"]["trail_s"])] if v else []})
     return {"id": dev["id"], "name": dev["name"], "default_app": dev["start_app"],
             "sv": settings.boot_version(dev), "apps": out}
 
