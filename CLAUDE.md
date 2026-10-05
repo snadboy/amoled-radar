@@ -131,6 +131,20 @@ One server for every small display: weather radar today, aircraft next (ported f
   HA: per-display Pan select (Centred + 8 directions at 50 mi). Store keys for pans:
   `w:~<vi><dx+'d'><dy+'d'>`, `a:~<dx><dy><view>`. Verified via HA on Display 60FC (weather
   and aircraft); swipes on the C6 touch boards not yet tried by the owner.
+- **Later 2026-10-05 (hub 67d315b, firmware 67d315b on all three):**
+  * Aircraft per-display settings: `labels_mi` (callsign/alt labels at that zoom or closer;
+    0 never, 999 always; default 5 small / 10 large; a tap on empty map flips until next
+    zoom), `trail_s` (unselected trails 0-240 s, one point per ~30 s poll; default 0 small /
+    60 large), `types` (lookup.kind: airline / business (fractional+charter list) / private
+    (N-reg) / other; sent as `states.bin?types=`, filtered on the hub). OpenSky's category is
+    ~always 0, hence callsign-based. The "no ORD after pan" report was just the zoom level.
+  * Weather "Active storm": built-in place id `active` (settings.places() appends it; not
+    stored, admin can't edit it). `weather/storm.py` scans the latest RainViewer frame
+    (z5 tiles) within STORM_SEARCH_MI (800) of the first real place, weights colours
+    (tans + light cyan clear-air rings = 0, darker blue <= 0.7, yellow 8-12, red 25,
+    pink 35), best 100 mi window by summed-area table; hysteresis KEEP 0.6, QUIET 300
+    -> home + "No active storms"; centre snapped to 0.25 deg. Label pill in the frames +
+    status strip. RainViewer ignores the colour-scheme parameter now (one palette).
 - **Open items:** P4 3.5" board bring-up when it arrives (install page first; chip revision,
   rotation flags unverified); owner to rename the displays and delete the six Dockhand stack
   variables (hub.db has them now); rotate DOCKHAND_API_TOKEN (it was pasted into a chat).
