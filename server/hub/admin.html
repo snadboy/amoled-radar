@@ -334,7 +334,7 @@ function previewRetry(img) {
     msg.className = "preview pending";
     img.after(msg);
   }
-  img.hidden = true;
+  img.style.display = "none";            // not .hidden: .preview sets display: block
   const n = +(img.dataset.tries || 0) + 1;
   img.dataset.tries = n;
   msg.textContent = n > 30 ? "No preview available" : "Preview is being rendered\u2026";
@@ -342,7 +342,7 @@ function previewRetry(img) {
   setTimeout(() => {
     if (!img.isConnected) return;
     const url = img.src.replace(/t=\d+/, "t=" + Date.now()), probe = new Image();
-    probe.onload = () => { img.onerror = null; img.src = url; img.hidden = false; msg.remove(); };
+    probe.onload = () => { img.onerror = null; img.src = url; img.style.display = ""; msg.remove(); };
     probe.onerror = () => previewRetry(img);
     probe.src = url;
   }, 10000);
