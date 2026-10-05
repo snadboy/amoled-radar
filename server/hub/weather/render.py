@@ -466,24 +466,15 @@ def obs_reading(lat, lon):
         print("    Open-Meteo %.3f,%.3f unavailable (%s)" % (lat, lon, str(e)[:40]))
         return "--", "--"
 
-def ha_reading():
-    """Live outdoor temp/humidity from Home Assistant. The TSR and garage FP300s
-    read ~10F warm because they sit in sheltered spaces, so use the dedicated
-    outdoor sensors."""
-    base = os.environ.get("HASS_SERVER", "").rstrip("/")
-    tok  = os.environ.get("HASS_TOKEN", "")
-    if not (base and tok):
-        return os.environ.get("RADAR_TEMP", "--"), os.environ.get("RADAR_HUM", "--")
-    def one(eid, default):
-        try:
-            r = urllib.request.Request(base + "/api/states/" + eid,
-                                       headers={"Authorization": "Bearer " + tok})
-            st = json.loads(urllib.request.urlopen(r, timeout=10).read())["state"]
-            return str(int(round(float(st))))
-        except Exception as e:
-            print("    HA %s unavailable (%s)" % (eid, str(e)[:40])); return default
-    return (one(os.environ.get("RADAR_TEMP_ENTITY", "sensor.outdoor_temperature"), "--"),
-            one(os.environ.get("RADAR_HUM_ENTITY",  "sensor.outdoor_humidity"),    "--"))
+def ha_reading(temp_eid="sensor.outdoor_temperature", hum_eid="sensor.outdoor_humidity"):
+    """Live temp/humidity from Home Assistant entities (a place's "temp" setting).
+    At home that's the dedicated outdoor sensors: the TSR and garage FP300s read ~10F
+    warm because they sit in sheltered spaces."""
+    from ..ha import ha_entity
+    def one(eid):
+        try: return str(int(round(float(ha_entity(eid)[0]))))
+        except (TypeError, ValueError): return "--"
+    return one(temp_eid), one(hum_eid)
 
 def main():
     out = os.environ.get("RADAR_OUT", "./out"); os.makedirs(out, exist_ok=True)

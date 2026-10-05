@@ -219,7 +219,7 @@ class Bundles:
         self.cache, self.lock, self.mem, self.building = cache, threading.Lock(), {}, {}
 
     def get(self, view, w, h, r):
-        key = (view["id"], w, h, r)
+        key = (json.dumps(view, sort_keys=True), w, h, r)    # an edited view gets a new map
         with self.lock:
             if key in self.mem: return self.mem[key]
             ev = self.building.get(key)

@@ -18,7 +18,8 @@ COPY hub ./hub
 ENV HUB_CACHE=/cache RADAR_CACHE=/cache
 VOLUME ["/cache"]
 
-EXPOSE 8080
+# 8080: devices (published on the LAN). 8081: admin page (DockTail VIP only).
+EXPOSE 8080 8081
 HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 

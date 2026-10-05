@@ -24,14 +24,13 @@
 #include "freertos/task.h"
 #include "jpeg_draw.h"
 #include "net.h"
-#include "nvs.h"
 #include "rdl.h"
 #include "store.h"
 #include "ui.h"
 
 static const char *TAG = "weather";
 
-#define URL_MAX       256
+#define URL_MAX       384
 #define MAX_VIEWS     8
 #define MAX_JPEG      (160 * 1024)
 #define CHECK_CUR_MS  (60 * 1000)
@@ -187,7 +186,9 @@ static int s_pick_x, s_pick_y, s_pick_w, s_pick_h;
 static bool picker_draw(int hl)
 {
     char url[URL_MAX]; uint8_t *jpg; size_t len; int w, h;
-    snprintf(url, sizeof(url), "%s/weather/ui/picker.jpg?hl=%d&cur=%s&%s", hub_url(), hl, s_views[s_cur].id, s_prof);
+    char ids[MAX_VIEWS * 15] = "";
+    for (int i = 0; i < s_nviews; i++) { if (i) strlcat(ids, ",", sizeof(ids)); strlcat(ids, s_views[i].id, sizeof(ids)); }
+    snprintf(url, sizeof(url), "%s/weather/ui/picker.jpg?hl=%d&cur=%s&ids=%s&%s", hub_url(), hl, s_views[s_cur].id, ids, s_prof);
     if (net_get(url, &jpg, &len, MAX_JPEG) != ESP_OK) return false;
     if (running() && jpeg_size(jpg, len, &w, &h) == ESP_OK) {
         s_pick_w = w; s_pick_h = h;
@@ -217,7 +218,6 @@ static void picker(void)
     }
     if (hl != s_cur) {
         s_cur = hl; s_view_changed = true;
-        hub_nvs_put("wview", s_views[hl].id);
         ESP_LOGI(TAG, "view -> %s", s_views[hl].id);
     }
     s_restart = true; s_status_at = 0; s_shown_idx = -1;
@@ -288,14 +288,6 @@ static void wait_idle(void)
 }
 
 // ---------------------------------------------------------------- app interface
-// A board migrated from firmware/radar keeps the city it was showing.
-static bool old_radar_view(char *out, size_t sz)
-{
-    nvs_handle_t h; bool ok = false;
-    if (nvs_open("radar", NVS_READONLY, &h) == ESP_OK) { ok = nvs_get_str(h, "view", out, &sz) == ESP_OK; nvs_close(h); }
-    return ok;
-}
-
 static void app_init(const cJSON *views)
 {
     const cJSON *v;
@@ -310,9 +302,6 @@ static void app_init(const cJSON *views)
     }
     if (!s_nviews) { strlcpy(s_views[0].id, "geneva", sizeof(s_views[0].id)); strlcpy(s_views[0].name, "Geneva", sizeof(s_views[0].name)); s_nviews = 1; }
     s_cur = def;
-    char saved[16];
-    if (hub_nvs_get("wview", saved, sizeof(saved)) || old_radar_view(saved, sizeof(saved)))
-        for (int i = 0; i < s_nviews; i++) if (!strcmp(s_views[i].id, saved)) s_cur = i;
     snprintf(s_prof, sizeof(s_prof), "w=%d&h=%d&r=%d&panel=%s", BOARD.w, BOARD.h, BOARD.corner_r, BOARD.panel);
     s_keys = xQueueCreate(8, sizeof(key_ev_t));
     xTaskCreate(draw_task, "weather", 6144, NULL, 5, &s_draw);

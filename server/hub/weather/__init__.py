@@ -26,7 +26,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from . import render as R
-from .. import core
+from .. import core, settings
 
 ID = "weather"
 
@@ -47,36 +47,10 @@ LOOP_BUDGET = int(os.environ.get("RADAR_LOOP_BUDGET", str(2060000)))
 # band can't be snow then; below it, the band is kept in case it is light snow.
 CLEAR_AIR_MIN_F = float(os.environ.get("RADAR_CLEAR_AIR_MIN_F", "40"))
 
-# City centres are public, so they can live in the repo. "ha": true means the
-# temperature comes from the Home Assistant outdoor sensors instead of the
-# nearest NWS station.
-DEFAULT_CITIES = [
-    {"id": "geneva",  "name": "Geneva",    "lat": 41.8875, "lon": -88.3054, "tz": "America/Chicago", "ha": True, "default": True,
-     "places": [["Chicago", 41.8781, -87.6298], ["Rockford", 42.2711, -89.0940],
-                ["Joliet", 41.5250, -88.0817], ["DeKalb", 41.9295, -88.7504]]},
-    {"id": "stlouis", "name": "St. Louis", "lat": 38.6270, "lon": -90.1994, "tz": "America/Chicago",
-     "places": [["St. Charles", 38.7881, -90.4974], ["Alton", 38.8906, -90.1843],
-                ["Belleville", 38.5201, -89.9840], ["Festus", 38.2206, -90.3960]]},
-    # Toledo is the obvious "south" town for Canton but lands on the progress bar
-    {"id": "canton",  "name": "Canton",    "lat": 42.3087, "lon": -83.4822, "tz": "America/Detroit",
-     "places": [["Detroit", 42.3314, -83.0458], ["Ann Arbor", 42.2808, -83.7430],
-                ["Pontiac", 42.6389, -83.2910], ["Monroe", 41.9164, -83.3977]]},
-    # Regional view framing all three cities (St. Louis .. Canton, ~580 mi across).
-    # Replaced an "Entire country" view on 2026-10-03: the lower 48 at ~9 km/px was
-    # too small to read on a 2.16-inch panel. lon_span fills the width; RainViewer
-    # zoom 5 at 512 px is ~1.86 km/px, matching what's shown. No rings or crosshair
-    # ("wide"). A 4th element of 1 marks one of your own cities (amber marker).
-    {"id": "midwest", "name": "Midwest", "lat": 40.5, "lon": -86.8, "tz": "America/Chicago",
-     "ha": True, "status_label": "Geneva", "wide": True, "suppress_clear_air": True,
-     "lon_span": 10.4, "base_zoom": 7, "radar_zoom": 5, "radar_tile": 512,
-     "places": [["Geneva", 41.8875, -88.3054, 1], ["St. Louis", 38.6270, -90.1994, 1],
-                ["Canton", 42.3087, -83.4822, 1], ["Milwaukee", 43.0389, -87.9065],
-                ["Indianapolis", 39.7684, -86.1581], ["Fort Wayne", 41.0793, -85.1394],
-                ["Louisville", 38.2527, -85.7585]]},
-]
-
-CITIES = json.loads(os.environ["RADAR_CITIES"]) if os.environ.get("RADAR_CITIES") else DEFAULT_CITIES
-BY_ID  = {c["id"]: c for c in CITIES}
+# Cities live in the hub's settings (admin page): settings.places(). Only places some
+# device shows are rendered (settings.places_in_use()).
+def _cities():
+    return settings.places_in_use()
 
 # State per (city, profile). Loops are rendered for every profile in use: the default
 # panel always, plus any profile a device registers or asks for (MAX_GEOMS at most).
@@ -119,7 +93,11 @@ def _jpeg(img):
     b = io.BytesIO(); img.save(b, "JPEG", quality=QUALITY, optimize=True); return b.getvalue()
 
 def reading(city):
-    return R.ha_reading() if city.get("ha") else R.obs_reading(city["lat"], city["lon"])
+    """(temp F, humidity %) as strings: from HA entities or the nearest NWS station."""
+    t = city.get("temp") or {"source": "nws"}
+    if t.get("source") == "ha":
+        return R.ha_reading(t.get("temp"), t.get("hum"))
+    return R.obs_reading(city["lat"], city["lon"])
 
 def clear_air_filter_on(city):
     """Always on for views that ask for it (wide); otherwise on only when the
@@ -218,8 +196,9 @@ def radar_loop():
             maps = None
             print("[radar] RainViewer index FAILED: %s" % e, flush=True)
         with _lock: geoms = list(_geoms.values())
+        cities = _cities()
         for g in geoms:
-            for c in CITIES:
+            for c in cities:
                 with _lock: st = _st(c["id"], g)
                 if only_new and st["frames"]:
                     continue
@@ -244,7 +223,7 @@ def radar_loop():
 def status_loop():
     while True:
         with _lock: geoms = list(_geoms.values())
-        for c in CITIES:
+        for c in _cities():
             for g in geoms:
                 try:
                     v = build_status(c, g)
@@ -254,9 +233,9 @@ def status_loop():
                     print("[status] %s %s FAILED: %s" % (c["id"], g.key, e), flush=True)
         time.sleep(STATUS_S)
 
-def views():
-    return [dict({k: c[k] for k in ("id", "name", "lat", "lon")}, default=bool(c.get("default")))
-            for c in CITIES]
+def view_summary(place, default=False):
+    """How a device sees one of its cities (in /device/hello)."""
+    return dict({k: place[k] for k in ("id", "name", "lat", "lon")}, default=default)
 
 def start():
     for pr in core.profiles():             # devices already registered: render their panels from the start
@@ -264,21 +243,33 @@ def start():
     _wake.clear()
     threading.Thread(target=radar_loop, daemon=True).start()
     threading.Thread(target=status_loop, daemon=True).start()
-    print("[weather] cities=%s  (radar every %ds, status every %ds)"
-          % (",".join(c["id"] for c in CITIES), RADAR_S, STATUS_S), flush=True)
+    print("[weather] cities in use=%s  (radar every %ds, status every %ds)"
+          % (",".join(c["id"] for c in _cities()), RADAR_S, STATUS_S), flush=True)
 
 def health():
     """Healthy when the default profile has a loop and a strip for every city; other
     profiles are listed (a profile that was just added needs a few minutes)."""
     d = R.DEFAULT_GEOM.key
+    ids = [c["id"] for c in _cities()]
     with _lock:
         per = {cid: {"frames": len(st["frames"]), "status": bool(st["status"]),
                      "radar_err": st["radar_err"], "status_err": st["status_err"]}
-               for (cid, gk), st in _state.items() if gk == d}
+               for (cid, gk), st in _state.items() if gk == d and cid in ids}
         others = {gk: sum(1 for (c, k), st in _state.items() if k == gk and st["frames"])
                   for gk in _geoms if gk != d}
-    ok = len(per) == len(CITIES) and all(v["frames"] and v["status"] for v in per.values())
-    return ok, dict(per, profiles={k: "%d/%d cities ready" % (n, len(CITIES)) for k, n in others.items()})
+    ok = len(per) == len(ids) and all(v["frames"] and v["status"] for v in per.values())
+    return ok, dict(per, profiles={k: "%d/%d cities ready" % (n, len(ids)) for k, n in others.items()})
+
+def preview_png(pid, w, h, r, panel):
+    """For the admin page: the latest frame and status strip of a city, at a profile."""
+    g = add_geom(w, h, r, panel)
+    if g is None or not settings.place(pid): return None
+    with _lock: st = dict(_st(pid, g))
+    if not st["frames"]: return None
+    img = R.Image.new("RGB", (g.w, g.h))
+    img.paste(R.Image.open(io.BytesIO(st["frames"][-1])), (0, 0))
+    if st["status"]: img.paste(R.Image.open(io.BytesIO(st["status"])), (0, g.view_h))
+    b = io.BytesIO(); img.save(b, "PNG"); return b.getvalue()
 
 def _geom(h, q):
     """The profile a request is for (default panel if it names none). Sends the error
@@ -320,7 +311,10 @@ def _ui(h, name, q, g):
     if name == "picker.jpg":
         try: hl = int(q.get("hl", "0"))
         except ValueError: hl = 0
-        entries = [(c["id"], c["name"], _temps.get(c["id"])) for c in CITIES]
+        # the requesting device's own cities, in its order (?ids=a,b,c); else all in use
+        cities = [settings.place(i) for i in q["ids"].split(",")] if q.get("ids") else _cities()
+        entries = [(c["id"], c["name"], _temps.get(c["id"])) for c in cities if c]
+        if not entries: return h.json({"error": "no cities"}, 404)
         return h.send(_jpeg(R.picker_panel(entries, hl % len(entries), q.get("cur", ""), g)), "image/jpeg")
     if name == "hold.jpg":
         return h.send(_jpeg(R.hold_pill()), "image/jpeg")
@@ -330,9 +324,9 @@ def handle(h, p, q):
     """Serve a weather path (new or legacy); False if it isn't one."""
     parts = p.split("/")
     if p in ("/weather/views.json", "/cities.json"):
-        return h.json(views())
+        return h.json([view_summary(c) for c in settings.places()])
     ui = (len(parts) == 4 and parts[1:3] == ["weather", "ui"]) or (len(parts) == 3 and parts[1] == "ui")
-    view = len(parts) >= 4 and parts[1] in ("weather", "c") and parts[2] in BY_ID
+    view = len(parts) >= 4 and parts[1] in ("weather", "c") and settings.place(parts[2]) is not None
     if not (ui or view):
         return False
     g = _geom(h, q)                         # ?w=&h=&r=&panel= (none: the default panel)

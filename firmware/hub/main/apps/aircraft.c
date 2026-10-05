@@ -879,8 +879,10 @@ static void build_ui(void)
 // ---------------------------------------------------------------- app interface
 static void app_init(const cJSON *views)
 {
-    const cJSON *v = cJSON_GetArrayItem(views, 0), *id = cJSON_GetObjectItem(v, "id");
+    const cJSON *v = cJSON_GetArrayItem(views, 0), *id = cJSON_GetObjectItem(v, "id"),
+                *sl = cJSON_GetObjectItem(v, "start_level");
     if (cJSON_IsString(id)) strlcpy(s_view, id->valuestring, sizeof(s_view));
+    if (cJSON_IsNumber(sl) && sl->valueint >= 0 && sl->valueint < MAX_LEVELS) s_level = sl->valueint;   // the hub's starting zoom
     snprintf(s_key, sizeof(s_key), "a:%.13s", s_view);   // store keys are 15 chars max
     s_info_mx = xSemaphoreCreateMutex();
     ui_lock(0);

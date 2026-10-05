@@ -6,6 +6,8 @@ account gets 4,000 a day; a ~100 mi box costs 1 per call, so 30 s = 2,880/day).
 """
 import json, math, os, threading, time, urllib.error, urllib.parse, urllib.request
 
+from .. import settings
+
 TOKEN_URL  = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 STATES_URL = "https://opensky-network.org/api/states/all"
 UA = "snadboy-display-hub/1.0 (personal homelab display)"
@@ -29,9 +31,9 @@ def _token_value():
     with _token_lock:
         if _token["value"] and _token["expires"] - time.time() > 60:
             return _token["value"]
-        cid, sec = os.environ.get("OPENSKY_CLIENT_ID", ""), os.environ.get("OPENSKY_CLIENT_SECRET", "")
+        cid, sec = settings.secret("opensky_client_id"), settings.secret("opensky_client_secret")
         if not (cid and sec):
-            raise AuthError("OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET not set")
+            raise AuthError("OpenSky client id / secret not set (admin page)")
         body = urllib.parse.urlencode({"grant_type": "client_credentials",
                                        "client_id": cid, "client_secret": sec}).encode()
         req = urllib.request.Request(TOKEN_URL, data=body, headers={
@@ -42,6 +44,14 @@ def _token_value():
             raise AuthError("token HTTP %d" % e.code)
         _token.update(value=r["access_token"], expires=time.time() + int(r.get("expires_in", 1800)))
         return _token["value"]
+
+def test():
+    """(ok, message) -- for the admin page's Test button: fetch a token."""
+    _drop_token()
+    try:
+        _token_value(); return True, "token ok"
+    except Exception as e:
+        return False, str(e)[:120]
 
 def _drop_token():
     with _token_lock: _token.update(value=None, expires=0.0)

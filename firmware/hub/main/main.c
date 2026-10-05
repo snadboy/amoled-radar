@@ -2,7 +2,11 @@
 //
 // Boot: board -> store -> LVGL -> WiFi -> /device/hello (registers this board's
 // profile and learns which apps and views the hub offers; cached in NVS for offline
-// boots) -> the saved or default app.
+// boots) -> the app the hub says this device starts on (its admin-page settings).
+//
+// Settings: the state poll carries the device's name (applied live) and a version of
+// its boot settings (apps, starting app / city / zoom). When that version changes the
+// device restarts to pick them up -- every boot starts from the hub's defaults.
 //
 // Buttons: PWR = screen off/on, BOOT = next app (hold: identity card), KEY = the active
 // app's action.
@@ -19,6 +23,7 @@
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -43,6 +48,7 @@ static const app_t *const APPS[] = { &APP_WEATHER, &APP_AIRCRAFT };
 #define MANUAL_ON_MS  (10 * 60 * 1000)
 
 static char s_id[18], s_name[25];
+static uint32_t s_sv;                // boot-settings version this boot started from
 static bool s_enabled[NAPPS];
 static int s_cur = -1;
 static bool s_on = true, s_manual_off, s_marked;
@@ -164,7 +170,6 @@ static void switch_to(int i, bool announce)
     if (s_cur >= 0) APPS[s_cur]->leave();
     s_cur = i;
     APPS[i]->enter();
-    hub_nvs_put("app", APPS[i]->id);
     if (announce && !APPS[i]->raw) toast(APPS[i]->name);   // LVGL is paused under a raw app
     ESP_LOGI(TAG, "app -> %s", APPS[i]->id);
 }
@@ -183,14 +188,11 @@ static void next_app(void)
 
 static int first_app(cJSON *h)
 {
-    char *saved = nvs_dup("app");
     const cJSON *def = h ? cJSON_GetObjectItem(h, "default_app") : NULL;
     int pick = -1;
-    for (int i = 0; i < NAPPS; i++) if (s_enabled[i] && saved && !strcmp(saved, APPS[i]->id)) pick = i;
     for (int i = 0; i < NAPPS && pick < 0; i++)
         if (s_enabled[i] && cJSON_IsString(def) && !strcmp(def->valuestring, APPS[i]->id)) pick = i;
     for (int i = 0; i < NAPPS && pick < 0; i++) if (s_enabled[i]) pick = i;
-    free(saved);
     return pick;
 }
 
@@ -272,7 +274,18 @@ static void poll_state(void)
     const cJSON *disp = cJSON_GetObjectItem(d, "display"), *br = cJSON_GetObjectItem(d, "brightness");
     if (cJSON_IsString(disp)) s_srv_on = strcmp(disp->valuestring, "off") != 0;
     if (cJSON_IsNumber(br) && br->valueint > 0 && br->valueint < 256) s_srv_bright = br->valueint;
+    const cJSON *nm = cJSON_GetObjectItem(d, "name"), *sv = cJSON_GetObjectItem(d, "sv");
+    if (cJSON_IsString(nm) && strcmp(nm->valuestring, s_name)) {         // renamed on the admin page: live
+        strlcpy(s_name, nm->valuestring, sizeof(s_name));
+        ESP_LOGI(TAG, "renamed: %s", s_name);
+    }
+    uint32_t v = cJSON_IsNumber(sv) ? (uint32_t)sv->valuedouble : 0;
     cJSON_Delete(d);
+    if (v && v != s_sv) {                // apps / starting points changed: start over from them
+        ESP_LOGW(TAG, "boot settings changed (%lu -> %lu): restarting", (unsigned long)s_sv, (unsigned long)v);
+        vTaskDelay(pdMS_TO_TICKS(200));
+        esp_restart();
+    }
 }
 
 static void bg_task(void *arg)
@@ -303,6 +316,8 @@ void app_main(void)
     cJSON *h = hello();
     const cJSON *nm = cJSON_GetObjectItem(h, "name");
     strlcpy(s_name, cJSON_IsString(nm) ? nm->valuestring : "Display", sizeof(s_name));
+    const cJSON *sv = cJSON_GetObjectItem(h, "sv");
+    s_sv = cJSON_IsNumber(sv) ? (uint32_t)sv->valuedouble : 0;
     identify(3000);                                     // which board is this?
     setup_apps(h);
     int first = first_app(h);

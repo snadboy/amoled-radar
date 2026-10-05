@@ -28,45 +28,48 @@ import io, json, math, os, struct, threading, time
 from PIL import Image, ImageDraw
 
 from . import basemap, lookup, opensky
-from .. import core
+from .. import core, settings
 
 ID = "aircraft"
 
-# The centre comes from the environment: the repo is public, and the default is the
-# public Geneva city centre the weather app already uses. Set AIR_LAT/AIR_LON to home.
-DEFAULT_VIEWS = [{"id": "home", "name": "Home",
-                  # "or": compose turns an unset ${AIR_LAT} into "", which must mean "default"
-                  "lat": float(os.environ.get("AIR_LAT") or "41.8875"),
-                  "lon": float(os.environ.get("AIR_LON") or "-88.3054"),
-                  "radius_mi": 50, "levels": [50, 25, 10]}]
-VIEWS = json.loads(os.environ["AIR_VIEWS"]) if os.environ.get("AIR_VIEWS") else DEFAULT_VIEWS
-BY_ID = {v["id"]: v for v in VIEWS}
+# Views live in the hub's settings (admin page): centre, radius, zoom levels. The exact
+# home position is set there, never in this public repo.
 
 HDR = struct.Struct("<4sIIiHBB")
 REC = struct.Struct("<IffffffI8s4sBB2x")
 F_GROUND, F_INFO, F_ROUTE = 1, 2, 4
 
-_pollers = {v["id"]: opensky.Poller(v, lookup.prefetch) for v in VIEWS}
+_pollers = {}                   # view id -> Poller, created when a device first asks
+_plock = threading.Lock()
 _bundles = basemap.Bundles(core.CACHE)
 
-def views():
-    return [{k: v[k] for k in ("id", "name", "lat", "lon", "radius_mi", "levels")} for v in VIEWS]
+def _poller(view):
+    """The view's poller; replaced if the view was edited (new centre or radius)."""
+    with _plock:
+        p = _pollers.get(view["id"])
+        if p is None or p.view != view:
+            p = _pollers[view["id"]] = opensky.Poller(view, lookup.prefetch)
+            threading.Thread(target=p.run, daemon=True).start()
+        return p
+
+def view_summary(view, start_level=0):
+    """How a device sees its aircraft view (in /device/hello)."""
+    return dict({k: view[k] for k in ("id", "name", "lat", "lon", "radius_mi", "levels")}, start_level=start_level)
 
 def start():
     lookup.start()
-    for p in _pollers.values():
-        threading.Thread(target=p.run, daemon=True).start()
     def warm():                 # the default profile's bundles, so a first device doesn't wait
-        for v in VIEWS:
+        for v in settings.views_in_use():
             try: _bundles.get(v, *DEFAULT_PROFILE)
             except Exception as e: print("[aircraft] %s bundle FAILED: %s" % (v["id"], e), flush=True)
     threading.Thread(target=warm, daemon=True).start()
-    print("[aircraft] views=%s  (poll every %ds while a device is watching)"
-          % (",".join(v["id"] for v in VIEWS), opensky.POLL_S), flush=True)
+    print("[aircraft] views in use=%s  (poll every %ds while a device is watching)"
+          % (",".join(v["id"] for v in settings.views_in_use()), opensky.POLL_S), flush=True)
 
 def health():
     per, ok = {}, True
-    for vid, p in _pollers.items():
+    with _plock: pollers = dict(_pollers)
+    for vid, p in pollers.items():
         s = p.snapshot()
         age = int(time.time() - s["last_ok"]) if s["last_ok"] else None
         fresh = s["status"] == opensky.ST_IDLE or (age is not None and age < 5 * opensky.POLL_S)
@@ -169,6 +172,13 @@ def render_preview(view, entry, level, s, w, h):
            fill=(216, 216, 216), font=f12, anchor="lm")
     b = io.BytesIO(); img.save(b, "PNG"); return b.getvalue()
 
+def preview_png(view, w, h, r, level=0):
+    """For the admin page: the view as a device of this profile would show it now
+    (without waking the OpenSky poller)."""
+    entry = _bundles.get(view, w, h, r)
+    if entry is None: return None
+    return render_preview(view, entry, level % len(entry["levels"]), _poller(view).snapshot(), w, h)
+
 # --- routes ---
 
 def _bundle(h, view, q):
@@ -187,7 +197,8 @@ def _bundle(h, view, q):
 def _info(h, icao_s, q):
     try: icao = int(icao_s, 16)
     except ValueError: return h.json({"error": "bad icao"}, 400)
-    latest = next((a for p in _pollers.values() for a in p.snapshot()["aircraft"] if a["icao"] == icao), None)
+    with _plock: pollers = list(_pollers.values())
+    latest = next((a for p in pollers for a in p.snapshot()["aircraft"] if a["icao"] == icao), None)
     def num(k, fallback):
         try: return float(q[k])
         except (KeyError, ValueError): return fallback
@@ -206,12 +217,13 @@ def handle(h, p, q):
     if len(parts) < 3 or parts[1] != "aircraft":
         return False
     if p == "/aircraft/views.json":
-        return h.json(views())
+        return h.json([view_summary(v) for v in settings.air_views()])
     if len(parts) == 4 and parts[2] == "info":
         return _info(h, parts[3], q)
-    if len(parts) != 4 or parts[2] not in BY_ID:
+    view = settings.air_view(parts[2]) if len(parts) == 4 else None
+    if view is None:
         return False
-    view, what, poller = BY_ID[parts[2]], parts[3], _pollers[parts[2]]
+    what, poller = parts[3], _poller(view)
     if what in ("states.bin", "states.json"):
         poller.touch()
         s = poller.snapshot()
