@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Build the firmware in Espressif's container. WiFi credentials come from the
 # shareables .env and go ONLY into the gitignored secrets.defaults -- never into
-# the repo. Usage: ./build.sh            (server = bedrock, the default)
-#                  HUB_SERVER_URL=http://192.168.86.220:8098 ./build.sh   (dev server)
+# the repo. One board per target; BOARD picks it (default c6):
+#   ./build.sh                                   C6 AMOLED 2.16", hub = bedrock (the default)
+#   BOARD=p4 ./build.sh                          P4 LCD 3.5"
+#   HUB_SERVER_URL=http://192.168.86.220:8099 ./build.sh   any board, another hub
+# Output: build-<board>/display_hub.bin (+ version.txt, shared).
 set -euo pipefail
 cd "$(dirname "$0")"
 ENV_FILE=${RADAR_ENV:-/mnt/shareables/.claude/.env}
@@ -31,11 +34,18 @@ open("secrets.defaults", "w").write("\n".join(lines) + "\n")
 os.umask(old)
 PY
 
-rm -f sdkconfig            # regenerate from defaults so secrets/server changes take effect
+BOARD=${BOARD:-c6}
+case "$BOARD" in
+  c6) TARGET=esp32c6 ;;
+  p4) TARGET=esp32p4 ;;
+  *) echo "BOARD must be c6 or p4" >&2; exit 1 ;;
+esac
+B=build-$BOARD; SDK=sdkconfig.$BOARD
+rm -f $SDK                # regenerate from defaults so secrets/server changes take effect
 # Firmware version = commit + build time. OTA installs whenever the server's differs.
 echo "$(git rev-parse --short HEAD)$(git diff --quiet -- . || echo +)-$(date -u +%m%d%H%M)" > version.txt
 docker run --rm -v "$PWD":/project -w /project -e HOME=/tmp -u "$(id -u):$(id -g)" \
   -e SDKCONFIG_DEFAULTS="sdkconfig.defaults;secrets.defaults" "$IDF_IMAGE" \
-  bash -c 'idf.py set-target esp32c6 >/dev/null && idf.py build' 2>&1 \
+  bash -c "idf.py -B $B -D SDKCONFIG=$SDK set-target $TARGET >/dev/null && idf.py -B $B -D SDKCONFIG=$SDK build" 2>&1 \
   | grep -E "error|warning:|Project build complete|binary size" | grep -v "^Checking" || true
-test -f build/display_hub.bin && ls -l build/display_hub.bin | awk '{print "built " $5 " bytes"}'
+test -f $B/display_hub.bin && ls -l $B/display_hub.bin | awk -v b=$BOARD '{print "built " b ": " $5 " bytes"}'

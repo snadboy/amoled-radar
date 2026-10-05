@@ -1,6 +1,23 @@
 dependencies:
   idf: ">=5.5.0"
-  # QSPI AMOLED driver (Apache-2.0); takes the CO5300's init commands as vendor config
-  espressif/esp_lcd_sh8601: "^1.0.0"
   # Overlay UI for interactive apps (aircraft). Configured through sdkconfig.defaults.
   lvgl/lvgl: "~9.3.0"
+  # C6 board: QSPI AMOLED driver (Apache-2.0); takes the CO5300's init commands as vendor config
+  espressif/esp_lcd_sh8601:
+    version: "^1.0.0"
+    rules:
+      - if: "target == esp32c6"
+  # P4 board: SPI LCD driver, and WiFi through the on-board C6 (versions as Waveshare's
+  # 04_wifistation example uses with IDF 5.5)
+  espressif/esp_lcd_st7796:
+    version: "^1"
+    rules:
+      - if: "target == esp32p4"
+  espressif/esp_wifi_remote:
+    version: "0.14.*"
+    rules:
+      - if: "target == esp32p4"
+  espressif/esp_hosted:
+    version: "1.4.*"
+    rules:
+      - if: "target == esp32p4"

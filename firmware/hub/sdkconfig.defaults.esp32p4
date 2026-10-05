@@ -1,0 +1,9 @@
+# Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (boards/ws_p4_35.c)
+# Its own OTA channel: a P4 image must never reach a C6 board, or the reverse.
+CONFIG_HUB_FW_CHANNEL="hub-p4"
+# 32 MB PSRAM in the package
+CONFIG_SPIRAM=y
+# WiFi through the on-board ESP32-C6 over SDIO (esp_hosted + esp_wifi_remote)
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+# Chip revision: Waveshare ships builds for rev < 3 and rev 3.x. Set after reading the
+# board's revision with esptool (see CLAUDE.md); ESP-IDF's default is used until then.

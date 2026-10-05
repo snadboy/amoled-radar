@@ -30,8 +30,9 @@ One server for every small display: weather radar today, aircraft next (ported f
   `~/radar-dev-cache` kept as a backup.
   **To ship a server change:** push -> CI builds ghcr.io/snadboy/display-hub:<sha> -> bump the tag
   in docker-homelab -> Deploy in Dockhand. Pending for the next bump: 70e7546 (empty AIR_* = default).
-  **To ship firmware:** `./build.sh`, then copy build/display_hub.bin + version.txt into bedrock's
-  volume `firmware/hub/` (boards check every 6 h, and 90 s after boot).
+  **To ship firmware:** `BOARD=c6 ./build.sh`, then copy build-c6/display_hub.bin + version.txt into
+  bedrock's volume `firmware/hub/` (P4: build-p4 -> `firmware/hub-p4/`). Boards check every 6 h
+  and 90 s after boot.
 - opensky-amoled archived 2026-10-04: private, read-only https://github.com/snadboy/opensky-amoled
   (local copy still at ~/projects/git/opensky-amoled). Old amoled-radar images removed from sdevs
   and bedrock.
@@ -47,13 +48,21 @@ One server for every small display: weather radar today, aircraft next (ported f
   loop height from RDL1 (store v6), sends its profile, tap opens/steps the picker.
   Fixed: store claimed only one "writing" slot (two sync tasks -> a slot erased mid-download,
   headers ANDed together); net_stream shared one static buffer between both tasks.
-  OPEN: on Display 2 downloads took 15-58 s (was 1.5 s) -- both slow runs had the screen off
-  (room empty); not explained yet. Display 2 currently runs a test build pointed at a test hub
-  on sdevs :8099 (container hub-test, cache in the session scratchpad) -- move it back to bedrock
-  when done. Not started: boards/ws_p4_35.c + esp32p4 build.
-- Builds: `./build.sh` (bedrock, the default) or `HUB_SERVER_URL=http://192.168.86.220:8098
-  ./build.sh` (dev). Flash by SERIAL, never by ttyACM number (both boards are on sdevs):
-  `PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
+  CRC: manifests carry loop_crc32 / bundle_crc32; firmware reads the slot back and checks
+  before committing (store v7). Found because Display 2 kept drawing a map cached by the
+  shared-buffer build: header and id fine, 30% of the bytes wrong (owner confirmed clean after).
+  Slow downloads (15-58 s) seen once with the screen off: not reproduced after the fixes.
+  P4 build DONE (compiles, 1.38 MB): `boards/ws_p4_35.c` (landscape 480x320; rotation flags
+  PANEL_*/TOUCH_* unverified), `apps/jpeg_draw_p4.c` (P4 ROM has no TJpgDec -> hardware JPEG
+  decoder into PSRAM; miniz IS in the P4 ROM), target-specific sdkconfig.defaults.esp32{c6,p4},
+  per-board build dirs (`BOARD=p4 ./build.sh` -> build-p4/), OTA channel `hub-p4`. ESP-IDF's
+  default chip revision is 3.x only (CONFIG_ESP32P4_REV_MIN_301): read the real one with
+  esptool before flashing. esp_hosted SDIO defaults: CMD 19, CLK 18, D0-D3 14-17, C6 reset 54.
+  Display 2 currently runs a test build pointed at a test hub on sdevs :8099 (container
+  hub-test, cache in the session scratchpad) -- move it back to bedrock when done.
+- Builds: `[BOARD=c6|p4] ./build.sh` (hub = bedrock by default; `HUB_SERVER_URL=...` for another)
+  -> `build-<board>/display_hub.bin`. Flash by SERIAL, never by ttyACM number:
+  `BOARD=c6 PORT=$(readlink -f /dev/serial/by-id/*20:6E:F1:16:A1:00*) ./flash.sh`.
 - **USB on sdevs** (pve-faraday VM 121): both pinned by physical port 2026-10-04 --
   `usb0: host=3-1.4.1` (weather board), `usb1: host=3-1.3` (aircraft board).
   | Hub name | Started as | USB serial = MAC | Host port | sdevs | IP |

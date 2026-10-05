@@ -2,7 +2,10 @@
 secrets.defaults
 sdkconfig
 sdkconfig.old
+sdkconfig.c6
+sdkconfig.p4
 build/
+build-*/
 managed_components/
 dependencies.lock
 version.txt
