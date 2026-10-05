@@ -53,6 +53,25 @@
   details summary { cursor: pointer; color: var(--dim); font-size: 13px; margin: 10px 0 4px; }
   .set { color: var(--ok); font-size: 12.5px; } .unset { color: var(--bad); font-size: 12.5px; }
   .hint { color: var(--dim); font-size: 12.5px; margin: 4px 0 0; }
+  /* Devices: list on the left, the selected display's editor on the right */
+  .devwrap { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .devlist { position: sticky; top: 12px; padding: 10px; max-height: calc(100vh - 140px); overflow-y: auto; }
+  .devlist input { margin-bottom: 8px; }
+  .devitem { display: block; width: 100%; text-align: left; background: none; border: 0; border-left: 3px solid transparent;
+             border-radius: 8px; padding: 8px 10px; color: var(--ink); font: inherit; cursor: pointer; }
+  .devitem:hover { background: #1a1f25; }
+  .devitem.on { background: #1c2229; border-left-color: var(--accent); }
+  .devitem .nm { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .devitem .sub { color: var(--dim); font-size: 12.5px; margin-top: 2px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #5a1f1f; flex: none; } .dot.ok { background: var(--ok); }
+  .dirty-mark { color: var(--accent); font-size: 12px; font-weight: 500; }
+  .editor h2 { margin: 0; font-size: 19px; display: flex; align-items: center; gap: 10px; }
+  .ed-top { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: flex-start; }
+  .ed-top > div { flex: 1 1 280px; min-width: 0; }
+  .ed-top > .preview { flex: 0 1 300px; min-width: 220px; margin-top: 0; }
+  .ed-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 14px; align-items: start; }
+  .editor .actions { position: sticky; bottom: 0; background: var(--panel); padding: 10px 0 2px; border-top: 1px solid var(--line); }
+  @media (max-width: 860px) { .devwrap { grid-template-columns: 1fr; } .devlist { position: static; max-height: 240px; } }
   @media (max-width: 560px) { main { padding: 14px 16px 50px; } .grid { grid-template-columns: 1fr; } .row3 { grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
@@ -66,7 +85,12 @@
   <button data-t="conn">Connections</button>
 </nav>
 <main>
-  <section id="devices" class="on"><div class="grid" id="devgrid"></div></section>
+  <section id="devices" class="on">
+    <div class="devwrap">
+      <div class="card devlist"><input id="devfilter" placeholder="Find a display…" autocomplete="off"><div id="devitems"></div></div>
+      <div class="card editor" id="editor"></div>
+    </div>
+  </section>
 
   <section id="places">
     <p class="hint">Cities the weather app can show. Each device picks its own from this list (Devices tab). Only cities some device uses are rendered.</p>
@@ -151,6 +175,13 @@
     <button class="b danger" id="v_del" onclick="delView()">Delete</button><span class="msg" id="v_msg"></span></div>
 </form></dialog>
 
+<dialog id="udlg"><form method="dialog">
+  <h2>Unsaved changes</h2>
+  <p id="u_text" class="meta" style="font-size:14px"></p>
+  <div class="actions"><button class="b primary" value="save">Save</button><button class="b danger" value="discard">Discard</button>
+    <button class="b" value="stay">Stay</button></div>
+</form></dialog>
+
 <datalist id="dl_binary"></datalist><datalist id="dl_sensor"></datalist>
 
 <script>
@@ -174,23 +205,75 @@ try { const t = localStorage.getItem("tab"); if (t) document.querySelector(`#tab
 
 function ago(t) { if (!t) return "never"; const s = Date.now() / 1000 - t; return s < 90 ? "just now" : s < 3600 ? Math.round(s / 60) + " min ago" : Math.round(s / 3600) + " h ago"; }
 
-function render() {
-  const online = S.devices.filter(d => d.online).length;
-  $("sub").textContent = `${S.devices.length} device${S.devices.length == 1 ? "" : "s"}, ${online} online`;
-  // ---- devices
-  $("devgrid").innerHTML = S.devices.length ? "" : `<p class="hint">No device has registered yet. A display appears here when it first connects to the hub.</p>`;
-  for (const d of S.devices) {
-    const pr = d.profile || {}, levels = (S.views.find(v => v.id == d.aircraft.view) || {}).levels || [];
-    const c = document.createElement("div"); c.className = "card"; c.dataset.id = d.id;
-    c.innerHTML = `
-      <h3>${esc(d.name)} <span class="badge ${d.online ? "ok" : "bad"}">${d.online ? "online" : "offline"}</span></h3>
-      <div class="meta">${esc(pr.board || "?")} · ${esc(pr.w)}×${esc(pr.h)} ${esc(pr.panel || "")} · fw ${esc(pr.fw || "?")}<br>${esc(d.id)} · ${esc(d.ip || "–")} · seen ${ago(d.last_seen)}
-        ${d.online && d.showing.app ? `<br>now: ${d.showing.app == "weather" ? "Weather · " + esc((S.places.find(p => p.id == d.showing.view) || {}).name || d.showing.view) : "Aircraft"} · screen ${d.showing.on ? "on" : "off"}` : ""}</div>
-      <img class="preview" loading="lazy" alt="what it shows at start" src="api/devices/${encodeURIComponent(d.id)}/preview.png?t=${Date.now()}" onerror="this.style.display='none'">
+// ---- devices: a list, and one editor for the selected display. Unsaved edits are
+// guarded when picking another display and when leaving the page.
+let selDev = null, devDirty = false;
+try { selDev = localStorage.getItem("dev"); } catch (e) {}
+const appName = a => a == "weather" ? "Weather radar" : "Aircraft";
+
+function showing(d) {
+  if (!d.online) return "offline · seen " + ago(d.last_seen);
+  if (!d.showing || !d.showing.app) return "online";
+  const what = d.showing.app == "weather" ? "Weather · " + ((S.places.find(p => p.id == d.showing.view) || {}).name || d.showing.view) : "Aircraft";
+  return what + (d.showing.on ? "" : " · screen off");
+}
+
+function renderDevList() {
+  if (S.devices.length && !S.devices.some(d => d.id == selDev)) selDev = S.devices[0].id;
+  const f = $("devfilter").value.trim().toLowerCase();
+  const list = S.devices.filter(d => !f || d.name.toLowerCase().includes(f) || d.id.includes(f));
+  $("devitems").innerHTML = S.devices.length ? list.map(d => `<button class="devitem ${d.id == selDev ? "on" : ""}" data-id="${esc(d.id)}">
+      <div class="nm"><span class="dot ${d.online ? "ok" : ""}"></span>${esc(d.name)}${d.id == selDev && devDirty ? ' <span class="dirty-mark">● unsaved</span>' : ""}</div>
+      <div class="sub">${esc(showing(d))}</div></button>`).join("") || '<p class="hint">No match.</p>'
+    : '<p class="hint">No display has registered yet. One appears here when it first connects to the hub.</p>';
+  $("devitems").querySelectorAll(".devitem").forEach(b => b.onclick = () => selectDevice(b.dataset.id));
+}
+$("devfilter").oninput = renderDevList;
+
+async function selectDevice(id) {
+  if (id == selDev) return;
+  if (!(await settleUnsaved())) return;
+  selDev = id; try { localStorage.setItem("dev", id); } catch (e) {}
+  renderDevList(); renderEditor();
+}
+
+// Unsaved edits: Save (stays put if saving fails), Discard, or Stay. true = go ahead.
+async function settleUnsaved() {
+  if (!devDirty) return true;
+  const d = S.devices.find(x => x.id == selDev);
+  $("u_text").textContent = `You changed ${d ? d.name : "this display"} without saving.`;
+  udlg.returnValue = "stay"; udlg.showModal();
+  const choice = await new Promise(r => udlg.addEventListener("close", () => r(udlg.returnValue), {once: true}));
+  if (choice == "save") return await saveDevice();
+  if (choice == "discard") { devDirty = false; return true; }
+  return false;
+}
+window.addEventListener("beforeunload", e => { if (devDirty) { e.preventDefault(); e.returnValue = ""; } });
+
+function markDirty() {
+  if (devDirty) return;
+  devDirty = true; renderDevList();
+  $("ed_msg").className = "msg"; $("ed_msg").textContent = "unsaved changes";
+}
+
+function renderEditor() {
+  devDirty = false;
+  const d = S.devices.find(x => x.id == selDev), c = $("editor");
+  if (!d) { c.innerHTML = '<p class="hint">Pick a display on the left.</p>'; return; }
+  const pr = d.profile || {}, levels = (S.views.find(v => v.id == d.aircraft.view) || {}).levels || [];
+  c.innerHTML = `
+    <div class="ed-top"><div>
+      <h2>${esc(d.name)} <span class="badge ${d.online ? "ok" : "bad"}">${d.online ? "online" : "offline"}</span></h2>
+      <div class="meta">${esc(pr.board || "?")} · ${esc(pr.w)}×${esc(pr.h)} ${esc(pr.panel || "")} · fw ${esc(pr.fw || "?")}<br>
+        ${esc(d.id)} · ${esc(d.ip || "–")} · seen ${ago(d.last_seen)}<br>now: ${esc(showing(d))}</div>
       <label>Name</label><input data-k="name" value="${d.named ? esc(d.name) : ""}" placeholder="${esc(d.name)}">
+    </div>
+    <img class="preview" loading="lazy" alt="what it shows at start" src="api/devices/${encodeURIComponent(d.id)}/preview.png?t=${Date.now()}" onerror="this.style.display='none'">
+    </div>
+    <div class="ed-cols">
       <fieldset><legend>Apps</legend>
-        ${S.apps.map(a => `<label class="inline"><input type="checkbox" data-app="${a}" ${d.apps.includes(a) ? "checked" : ""}> ${a == "weather" ? "Weather radar" : "Aircraft"}</label>`).join("")}
-        <label>Starts on</label><select data-k="start_app">${S.apps.map(a => `<option value="${a}" ${d.start_app == a ? "selected" : ""}>${a == "weather" ? "Weather radar" : "Aircraft"}</option>`).join("")}</select>
+        ${S.apps.map(a => `<label class="inline"><input type="checkbox" data-app="${a}" ${d.apps.includes(a) ? "checked" : ""}> ${appName(a)}</label>`).join("")}
+        <label>Starts on</label><select data-k="start_app">${S.apps.map(a => `<option value="${a}" ${d.start_app == a ? "selected" : ""}>${appName(a)}</option>`).join("")}</select>
       </fieldset>
       <fieldset><legend>Weather</legend>
         ${S.places.map(p => `<label class="inline"><input type="checkbox" data-place="${p.id}" ${d.weather.places.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}
@@ -208,34 +291,52 @@ function render() {
           <div><label>Bright min</label><input data-s="bright_min" value="${d.screen.bright_min}"></div>
           <div><label>Bright max</label><input data-s="bright_max" value="${d.screen.bright_max}"></div></div>
         <label>Brightness per lux</label><input data-s="bright_per_lux" value="${d.screen.bright_per_lux}">
-        <p class="hint">Brightness = min + lux × per-lux, capped at max (1–255). Screen and name changes apply within 30 s; apps and starting points restart the display.</p>
+        <p class="hint">Brightness = min + lux × per-lux, capped at max (1–255). Screen and name changes apply within a few seconds; apps and starting points restart the display.</p>
       </fieldset>
-      <div class="actions"><button class="b primary">Save</button><button class="b danger">Forget</button><span class="msg"></span></div>`;
-    const [save, forget] = c.querySelectorAll(".actions button"), msg = c.querySelector(".msg");
-    c.addEventListener("input", () => { c.dataset.dirty = 1; msg.className = "msg"; msg.textContent = "unsaved changes"; });
-    c.querySelector("[data-k=view]").onchange = e => {             // zoom choices follow the view
-      const lv = (S.views.find(v => v.id == e.target.value) || {}).levels || [];
-      c.querySelector("[data-k=level]").innerHTML = lv.map((l, i) => `<option value="${i}">${l} mi</option>`).join("");
-    };
-    save.onclick = async () => {
-      const q = s => c.querySelector(s), body = {
-        name: q("[data-k=name]").value,
-        apps: [...c.querySelectorAll("[data-app]")].filter(x => x.checked).map(x => x.dataset.app),
-        start_app: q("[data-k=start_app]").value,
-        weather: {places: [...c.querySelectorAll("[data-place]")].filter(x => x.checked).map(x => x.dataset.place), start: q("[data-k=wstart]").value},
-        aircraft: {view: q("[data-k=view]").value, start_level: +q("[data-k=level]").value},
-        screen: Object.fromEntries([...c.querySelectorAll("[data-s]")].map(x => [x.dataset.s, x.value])),
-      };
-      save.disabled = true; msg.className = "msg"; msg.textContent = "saving…";
-      try { S = await api("PUT", "api/devices/" + encodeURIComponent(d.id), body); render(); }
-      catch (e) { msg.className = "msg bad"; msg.textContent = e.message; save.disabled = false; }
-    };
-    forget.onclick = async () => {
-      if (!confirm(`Forget ${d.name}? It re-registers with default settings next time it connects.`)) return;
-      S = await api("DELETE", "api/devices/" + encodeURIComponent(d.id)); render();
-    };
-    $("devgrid").append(c);
+    </div>
+    <div class="actions"><button class="b primary" id="ed_save">Save</button><button class="b" id="ed_revert">Discard changes</button>
+      <button class="b danger" id="ed_forget">Forget</button><span class="msg" id="ed_msg"></span></div>`;
+  c.oninput = c.onchange = markDirty;
+  c.querySelector("[data-k=view]").addEventListener("change", e => {            // zoom choices follow the view
+    const lv = (S.views.find(v => v.id == e.target.value) || {}).levels || [];
+    c.querySelector("[data-k=level]").innerHTML = lv.map((l, i) => `<option value="${i}">${l} mi</option>`).join("");
+  });
+  $("ed_save").onclick = () => saveDevice();
+  $("ed_revert").onclick = () => { renderEditor(); renderDevList(); };
+  $("ed_forget").onclick = async () => {
+    if (!confirm(`Forget ${d.name}? It re-registers with default settings next time it connects.`)) return;
+    devDirty = false;
+    S = await api("DELETE", "api/devices/" + encodeURIComponent(d.id)); selDev = null; render(); renderEditor();
+  };
+}
+
+async function saveDevice() {                     // true when saved
+  const c = $("editor"), q = s => c.querySelector(s), msg = $("ed_msg"), id = selDev;
+  const body = {
+    name: q("[data-k=name]").value,
+    apps: [...c.querySelectorAll("[data-app]")].filter(x => x.checked).map(x => x.dataset.app),
+    start_app: q("[data-k=start_app]").value,
+    weather: {places: [...c.querySelectorAll("[data-place]")].filter(x => x.checked).map(x => x.dataset.place), start: q("[data-k=wstart]").value},
+    aircraft: {view: q("[data-k=view]").value, start_level: +q("[data-k=level]").value},
+    screen: Object.fromEntries([...c.querySelectorAll("[data-s]")].map(x => [x.dataset.s, x.value])),
+  };
+  $("ed_save").disabled = true; msg.className = "msg"; msg.textContent = "saving…";
+  try {
+    S = await api("PUT", "api/devices/" + encodeURIComponent(id), body);
+    devDirty = false; render(); renderEditor();
+    $("ed_msg").className = "msg ok"; $("ed_msg").textContent = "saved";
+    return true;
+  } catch (e) {
+    msg.className = "msg bad"; msg.textContent = e.message; $("ed_save").disabled = false;
+    return false;
   }
+}
+
+function render() {
+  const online = S.devices.filter(d => d.online).length;
+  $("sub").textContent = `${S.devices.length} device${S.devices.length == 1 ? "" : "s"}, ${online} online`;
+  renderDevList();
+  if (!devDirty && !document.activeElement?.closest("#editor")) renderEditor();
   // ---- places, views
   $("placerows").innerHTML = S.places.map(p => `<tr><td>${esc(p.name)}</td><td>${(+p.lat).toFixed(3)}, ${(+p.lon).toFixed(3)}</td>
     <td>${p.temp.source == "ha" ? "HA: " + esc(p.temp.temp) : "NWS station"}</td><td><button class="b" onclick="editPlace('${p.id}')">Edit</button></td></tr>`).join("");
@@ -347,7 +448,7 @@ document.querySelectorAll("input[name=p_src]").forEach(r => r.onchange = () => $
   try { S = await api("GET", "api/state"); render(); loadEntities(); if ($("fw").classList.contains("on")) loadFirmware(); }
   catch (e) { $("sub").textContent = "can't reach the hub: " + e.message; }
   setInterval(async () => {                       // refresh online status, without clobbering edits in progress
-    if (document.querySelector("dialog[open], .card[data-dirty]") || document.activeElement?.closest(".card")) return;
+    if (document.querySelector("dialog[open]") || document.activeElement?.closest(".card:not(.devlist)")) return;
     try { S = await api("GET", "api/state"); render(); } catch (e) {}
   }, 30000);
 })();
