@@ -192,7 +192,10 @@ def build_radar(city, maps, g):
                                "-- the free tier caps at 7" % city.get("radar_zoom", R.RADAR_ZOOM))
         if suppress:
             layer = R.suppress_clear_air(layer)      # before resampling blends colours
-        layer = layer.resize((OW, OH), R.Image.LANCZOS)
+        # NEAREST: RainViewer's tiles are already blocky (~1.4x up here), so it looks the
+        # same as LANCZOS but has no in-between shades -- ~40% smaller device loops,
+        # i.e. more frames (smoother) for busy storms within the flash slot
+        layer = layer.resize((OW, OH), R.Image.NEAREST)
         try:
             # not on the Active view: it roams to storms beyond NOAA's radar coverage
             mask = None if city.get("auto") else R.qc_mask(lat, lon, city, f["time"], qc_avail, OW, OH, g)

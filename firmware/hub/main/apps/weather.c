@@ -42,6 +42,7 @@ static const char *TAG = "weather";
 #define STATUS_MS     (60 * 1000)
 #define PICK_IDLE_MS  3000
 #define LOOP_MS       5000
+#define FRAME_MAX_MS  112             // ~9 fps: a full 45-frame loop's pace
 #define DWELL_MS      1500
 #define AMBER         0xFD80          // ~ #ffb703
 #define TRACK         0x31A7          // dark grey
@@ -340,10 +341,13 @@ static void play(void)
     store_pin(slot); s_shown_slot = slot; s_shown = h;
     if (h.height != s_view_h) { s_view_h = h.height; s_status_at = 0; }   // geometry comes with the loop
     s_restart = false;
-    // Whole loop ~5 s plus a 1.5 s dwell on the latest frame, whatever the frame
-    // count (the hub drops in-betweens when a stormy loop would not fit).
+    // Whole loop ~5 s plus a 1.5 s dwell on the latest frame.
+    // A full loop (45 frames) plays in ~5 s. A short one (a busy storm that only fits
+    // ~20 frames in the slot) keeps the same pace and just ends sooner: stretching it
+    // to 5 s made the storm crawl at half speed.
     int frame_ms = LOOP_MS / h.nframes;
     if (frame_ms < 40) frame_ms = 40;
+    if (frame_ms > FRAME_MAX_MS) frame_ms = FRAME_MAX_MS;
     for (int i = 0; i < h.nframes && running() && !s_restart; i++) {
         int64_t t0 = ms();
         if (rdl_draw(slot, &h, i, 256) != ESP_OK) { s_restart = true; break; }
