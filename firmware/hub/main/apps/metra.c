@@ -3,7 +3,9 @@
 // The hub draws the whole page (server/hub/metra.py) from Home Assistant's SB Metra
 // integration; this fetches it every REFRESH_MS and puts it on the panel. The view is
 // the line; the stations come as a ready-made query string in the hello, appended
-// as-is. KEY or a tap refreshes it now.
+// as-is. KEY refreshes it now; a tap on a train (its row in the list, or its arrow on
+// the track) asks the hub for its card (detail.jpg?x=&y=), shown until a tap or KEY, or
+// DETAIL_MS. A tap anywhere else refreshes.
 //
 // Draws to the panel itself (like weather): LVGL is paused while it is active, and
 // leave() returns only once the draw task has stopped touching the panel.
@@ -24,9 +26,10 @@
 
 static const char *TAG = "metra";
 
-#define URL_MAX      256
+#define URL_MAX      320
 #define MAX_JPEG     (160 * 1024)
 #define REFRESH_MS   15000
+#define DETAIL_MS    20000
 
 static char s_view[16] = "UP-W";
 static char s_query[128] = "from=Chicago+OTC&to=Elburn";   // from the hub
@@ -38,12 +41,32 @@ static bool s_touched;
 static int64_t ms(void) { return esp_timer_get_time() / 1000; }
 static bool running(void) { return s_active && s_screen_on; }
 
-static bool tapped(void)                     // a new touch, not a held one
+static bool tapped(int *tx, int *ty)         // a new touch, not a held one; tx, ty: where
 {
     int x, y;
     bool now = board_touch(&x, &y), tap = now && !s_touched;
     s_touched = now;
+    if (tap && tx) { *tx = x; *ty = y; }
     return tap;
+}
+
+// The hub's card about the train drawn at (x, y), until a tap or KEY (or DETAIL_MS).
+// False when there is no train there.
+static bool show_detail(int x, int y)
+{
+    char url[URL_MAX]; uint8_t *jpg; size_t len; int status;
+    snprintf(url, sizeof(url), "%s/metra/%s/detail.jpg?w=%d&h=%d&r=%d&x=%d&y=%d&%s", hub_url(), s_view,
+             BOARD.w, BOARD.h, BOARD.corner_r, x, y, s_query);
+    if (net_fetch(url, &jpg, &len, MAX_JPEG, &status) != ESP_OK) return false;
+    if (running()) jpeg_draw(jpg, len, 0, 0, 256);
+    free(jpg);
+    int64_t until = ms() + DETAIL_MS;
+    while (running() && ms() < until) {
+        key_ev_t ev;
+        bool key = xQueueReceive(s_keys, &ev, pdMS_TO_TICKS(40)) == pdTRUE && ev.btn == BTN_KEY && ev.type == KEY_SHORT;
+        if (key || tapped(NULL, NULL)) break;
+    }
+    return true;
 }
 
 static void draw_page(void)
@@ -71,7 +94,9 @@ static void draw_task(void *arg)
         while (running() && ms() < until) {
             key_ev_t ev;
             bool key = xQueueReceive(s_keys, &ev, pdMS_TO_TICKS(40)) == pdTRUE && ev.btn == BTN_KEY && ev.type == KEY_SHORT;
-            if (key || tapped()) break;                                    // refresh now
+            int tx, ty;
+            if (tapped(&tx, &ty)) { show_detail(tx, ty); break; }          // then the page again
+            if (key) break;                                                // refresh now
         }
     }
 }

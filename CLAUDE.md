@@ -181,7 +181,10 @@ One server for every small display: weather radar today, aircraft next (ported f
   between two stations = the fullest trip serving both (follows ME/RI branches). Device
   settings `metra: {line, from, to}` (default UP-W Chicago OTC -> Elburn); admin tab with
   Line / From / To dropdowns from `GET /api/metra?line=`. Firmware `apps/metra.c` = trimmed
-  airlist.c (fetch every 15 s; KEY/tap refresh). Ideas not built: tap a train for its stops.
+  airlist.c (fetch every 15 s; KEY/tap refresh). Tap a train (list row, or nearest arrow within ~50 px of the track) ->
+  `detail.jpg?x=&y=` card: delay, direction + destination + where it started, remaining stops with
+  live time and grey timetable time (the stretch's ends in amber); hub keeps `_shown` per
+  (line, from, to, w, h) from the last render.
 - **Remote Control server (2026-10-06):** `claude-rc@display-hub` (ops template: same-dir in this
   repo, `--permission-mode default`, because sessions here deploy the hub and publish firmware)
   runs on sdevs, so this repo is reachable from the Claude Android app / claude.ai/code -> Code

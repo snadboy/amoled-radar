@@ -16,8 +16,11 @@ connection -- one source of truth, no Metra API use of our own:
                               stations, the path between two of them, and how long a train
                               takes between stops (so it can be placed between them).
 
-Endpoint
+Endpoints
   /metra/<line>/line.jpg?w=&h=&r=&from=<station>&to=<station>
+  /metra/<line>/detail.jpg?...same...&x=&y=   the page dimmed under a card about the train
+      drawn at that point of the last line.jpg (a list row, or an arrow on the track);
+      404 when there is none
 """
 import io, threading, time
 from datetime import datetime
@@ -44,6 +47,9 @@ GREEN, AMBER, RED = (64, 200, 100), (255, 183, 3), (240, 70, 60)
 _lock = threading.Lock()
 _active = (0, None)                       # (fetched, {line: [train]})
 _sched = {}                               # line: (fetched, date, [trip])
+# Where each train was drawn on the last page, per (line, from, to, w, h): a tap on the
+# device names a point; the train under it is the one that was drawn there.
+_shown = {}
 
 def _colour(line):
     """The line's colour, lifted until it reads on black (HC maroon, SWS navy)."""
@@ -238,6 +244,10 @@ def render(line, a, b, w, h, r, now=None):
     lst = sorted(trains, key=lambda x: (_mins(x[2]["eta"]) - (now.hour * 60 + now.minute) + 720) % 1440)
     if len(lst) > max_rows: lst = lst[:max_rows - 1]
     numw = max([d.textlength("▶ " + t["train"], font=f_num) for _, _, t in trains] or [0])
+    with _lock:
+        _shown[(line, a, b, w, h)] = {"track_y": y, "row_h": row_h, "slack": int(26 * s),
+                                      "marks": [(X(f), t["train"]) for f, _, t in trains],
+                                      "rows": [(lab_top + i * row_h, t["train"]) for i, (_, _, t) in enumerate(lst)]}
     for i, (fpos, head, t) in enumerate(lst):
         ly, c = lab_top + i * row_h, _delay_col(t)
         dl = t.get("delay_min") or 0
@@ -253,6 +263,76 @@ def render(line, a, b, w, h, r, now=None):
         d.text((w // 2, lab_top + row_h), "No trains between these stations now", font=f_lab, fill=DIM, anchor="mm")
     foot = "%d train%s on this stretch" % (len(trains), "" if len(trains) == 1 else "s")
     d.text((w // 2 + ox, foot_y), foot, font=f_ft, fill=DIM, anchor="mb")
+    return img
+
+def _tapped(line, a, b, w, h, tx, ty):
+    """The train drawn under (tx, ty) on the last page: a list row, or the nearest arrow
+    when the tap is on the track. None for anywhere else."""
+    with _lock: sh = _shown.get((line, a, b, w, h))
+    if not sh: return None
+    for y0, num in sh["rows"]:
+        if y0 - 4 <= ty < y0 + sh["row_h"] - 4: return num
+    if abs(ty - sh["track_y"]) <= 2 * sh["slack"] and sh["marks"]:
+        x, num = min(sh["marks"], key=lambda m: abs(m[0] - tx))
+        if abs(x - tx) <= 2 * sh["slack"]: return num
+    return None
+
+def detail(line, a, b, w, h, r, tx, ty):
+    """The page dimmed under a card about the tapped train: where it's going, how late,
+    and every stop it has left with live and timetable times. None: no train there."""
+    num = _tapped(line, a, b, w, h, tx, ty)
+    if num is None: return None
+    img = render(line, a, b, w, h, r).point(lambda v: v // 4)
+    d = ImageDraw.Draw(img)
+    s = min(w, h) / 480.0
+    F = lambda sz, bold=False: basemap.font(max(11, int(sz * s)), bold)
+    side = max(16, int(r * 0.45))
+    cx0, cx1 = side - 6, w - side + 6
+    cy0, cy1 = max(10, int(r * 0.3)), h - max(10, int(r * 0.3))
+    t = next((x for x in _active_trains(line) if x["train"] == num), None)
+    c = _delay_col(t) if t else DIM
+    d.rounded_rectangle((cx0, cy0, cx1, cy1), radius=int(16 * s), fill=(16, 20, 24), outline=c, width=2)
+    x, y, room = cx0 + int(16 * s), cy0 + int(14 * s), cx1 - cx0 - int(32 * s)
+    if t is None:
+        d.text(((cx0 + cx1) // 2, (cy0 + cy1) // 2), "Train %s has finished its run" % num, font=F(19), fill=SUB, anchor="mm")
+        return img
+    # title: train ............ how late
+    dl = t.get("delay_min") or 0
+    d.text((x, y), "Train %s" % num, font=F(30, True), fill=INK, anchor="la")
+    d.text((cx1 - int(16 * s), y + int(8 * s)), "%d min late" % dl if dl >= 1 else "%d min early" % -dl if dl <= -1 else "On time",
+           font=F(20, True), fill=c, anchor="ra")
+    y += int(42 * s)
+    sched = next((tr for tr in trips(line) if tr["train"] == num), None)
+    where = "%s to %s" % ((t.get("direction") or "").capitalize() or "Bound", t.get("destination", "?"))
+    if sched: where += "  ·  left %s %s" % (sched["stations"][0]["station"], _hm12(sched["stations"][0]["time"]))
+    d.text((x, y), _fit(d, where, F(17), room), font=F(17), fill=SUB, anchor="la")
+    y += int(32 * s)
+    # stops still to come: station ....... live time (timetable time when different)
+    planned = {st["station"]: st["time"] for st in (sched or {}).get("stations", [])}
+    stops = [st for st in t.get("stops", []) if st.get("eta", "?") != "?"]
+    row = int(27 * s)
+    fit = max(1, (cy1 - int(40 * s) - y) // row)
+    if len(stops) > fit: stops = stops[:fit - 2] + [None] + stops[-1:]
+    f_st, f_b, f_tm = F(18), F(18, True), F(18, True)
+    for st in stops:
+        if st is None:
+            d.text((x + int(14 * s), y), "⋮", font=f_st, fill=DIM, anchor="la"); y += row; continue
+        mine = st["station"] in (a, b)                     # the stretch's ends stand out
+        d.ellipse((x, y + int(6 * s), x + int(9 * s), y + int(15 * s)), fill=_colour(line))
+        tm = _hm12(st["eta"])
+        pl = planned.get(st["station"])
+        tw = d.textlength(tm, font=f_tm)
+        d.text((cx1 - int(16 * s), y), tm, font=f_tm, fill=c if dl >= 3 else INK, anchor="ra")
+        extra = 0
+        if pl and pl != st["eta"]:
+            ps = _hm12(pl)
+            d.text((cx1 - int(16 * s) - tw - int(10 * s), y + int(2 * s)), ps, font=F(15), fill=DIM, anchor="ra")
+            extra = d.textlength(ps, font=F(15)) + int(10 * s)
+        nx = x + int(20 * s)
+        d.text((nx, y), _fit(d, st["station"], f_b if mine else f_st, cx1 - int(28 * s) - tw - extra - nx),
+               font=f_b if mine else f_st, fill=AMBER if mine else INK, anchor="la")
+        y += row
+    d.text(((cx0 + cx1) // 2, cy1 - int(16 * s)), "grey: timetable  ·  tap or KEY to close", font=F(13), fill=DIM, anchor="mm")
     return img
 
 def next_departure(line, here, there, now, skip=()):
@@ -274,8 +354,8 @@ def preview_png(cfg, w, h, r):
     b = io.BytesIO(); render(cfg["line"], cfg["from"], cfg["to"], w, h, r).save(b, "PNG"); return b.getvalue()
 
 def handle(h, p, q):
-    parts = p.split("/")                        # ['', 'metra', <line>, 'line.jpg']
-    if len(parts) != 4 or parts[1] != ID or parts[3] != "line.jpg":
+    parts = p.split("/")                        # ['', 'metra', <line>, 'line.jpg' | 'detail.jpg']
+    if len(parts) != 4 or parts[1] != ID or parts[3] not in ("line.jpg", "detail.jpg"):
         return False
     try:
         w, hh, r = int(q.get("w", 480)), int(q.get("h", 480)), int(q.get("r", 56))
@@ -283,4 +363,9 @@ def handle(h, p, q):
         return h.json({"error": "bad parameters"}, 400)
     if not (100 <= w <= 2048 and 100 <= hh <= 2048):
         return h.json({"error": "bad size"}, 400)
+    if parts[3] == "detail.jpg":
+        try: tx, ty = int(q.get("x", -1)), int(q.get("y", -1))
+        except ValueError: tx = ty = -1
+        img = detail(parts[2], q.get("from", ""), q.get("to", ""), w, hh, r, tx, ty)
+        return h.send(_jpeg(img), "image/jpeg") if img else h.json({"error": "no train there"}, 404)
     return h.send(_jpeg(render(parts[2], q.get("from", ""), q.get("to", ""), w, hh, r)), "image/jpeg")
