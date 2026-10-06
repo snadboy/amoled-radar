@@ -3,7 +3,8 @@
 // The hub draws the whole page (server/hub/airlist.py) from the same OpenSky data and
 // lookups as the Aircraft radar app; this fetches it every few seconds and puts it on
 // the panel. The hub's options (radius, flight types...) come as a ready-made query
-// string in the hello, appended as-is. KEY or a tap refreshes it now.
+// string in the hello, appended as-is. KEY refreshes it now; a tap on a flight asks the
+// hub for its details card (detail.jpg?y=), shown until a tap or KEY, or DETAIL_MS.
 //
 // Draws to the panel itself (like weather): LVGL is paused while it is active, and
 // leave() returns only once the draw task has stopped touching the panel.
@@ -27,6 +28,7 @@ static const char *TAG = "airlist";
 #define URL_MAX      256
 #define MAX_JPEG     (160 * 1024)
 #define REFRESH_MS   5000
+#define DETAIL_MS    20000
 
 static char s_view[16] = "home";
 static char s_query[96] = "mi=50";        // from the hub, e.g. "mi=50&types=airline,private"
@@ -38,12 +40,32 @@ static bool s_touched;
 static int64_t ms(void) { return esp_timer_get_time() / 1000; }
 static bool running(void) { return s_active && s_screen_on; }
 
-static bool tapped(void)                     // a new touch, not a held one
+static bool tapped(int *ty)                  // a new touch, not a held one; ty: where
 {
     int x, y;
     bool now = board_touch(&x, &y), tap = now && !s_touched;
     s_touched = now;
+    if (tap && ty) *ty = y;
     return tap;
+}
+
+// The hub's card about the flight on the tapped row, until a tap or KEY (or DETAIL_MS).
+// False when there is no flight there (the header, an empty row).
+static bool show_detail(int y)
+{
+    char url[URL_MAX]; uint8_t *jpg; size_t len; int status;
+    snprintf(url, sizeof(url), "%s/airlist/%s/detail.jpg?w=%d&h=%d&r=%d&y=%d&%s", hub_url(), s_view,
+             BOARD.w, BOARD.h, BOARD.corner_r, y, s_query);
+    if (net_fetch(url, &jpg, &len, MAX_JPEG, &status) != ESP_OK) return false;
+    if (running()) jpeg_draw(jpg, len, 0, 0, 256);
+    free(jpg);
+    int64_t until = ms() + DETAIL_MS;
+    while (running() && ms() < until) {
+        key_ev_t ev;
+        bool key = xQueueReceive(s_keys, &ev, pdMS_TO_TICKS(40)) == pdTRUE && ev.btn == BTN_KEY && ev.type == KEY_SHORT;
+        if (key || tapped(NULL)) break;
+    }
+    return true;
 }
 
 static void draw_page(void)
@@ -71,7 +93,9 @@ static void draw_task(void *arg)
         while (running() && ms() < until) {
             key_ev_t ev;
             bool key = xQueueReceive(s_keys, &ev, pdMS_TO_TICKS(40)) == pdTRUE && ev.btn == BTN_KEY && ev.type == KEY_SHORT;
-            if (key || tapped()) break;                                    // refresh now
+            int ty;
+            if (tapped(&ty)) { show_detail(ty); break; }                   // then the list again
+            if (key) break;                                                // refresh now
         }
     }
 }
