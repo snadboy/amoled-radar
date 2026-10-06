@@ -21,6 +21,7 @@ ID = "airlist"
 MAX_MI = 100
 DIRS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 DIM, INK, SUB, AMBER = (120, 130, 142), (236, 240, 244), (150, 160, 172), (255, 183, 3)
+LINE2 = (196, 204, 214)                  # second line: brighter than SUB (was too dim to read)
 
 def view_summary(view, radius_mi=50):
     return {"id": view["id"], "name": view["name"], "lat": view["lat"], "lon": view["lon"], "radius_mi": radius_mi}
@@ -64,7 +65,7 @@ def render(view, w, h, r, radius_mi=50, page=0):
     d = ImageDraw.Draw(img)
     s = h / 480.0 if h >= w else w / 480.0                 # scale from the 480 px design
     f_cs, f_dest, f_sub, f_hd = (basemap.font(max(12, int(sz * min(1.0, s))), b)
-                                 for sz, b in ((21, True), (17, False), (15, False), (14, True)))
+                                 for sz, b in ((21, True), (17, False), (17, False), (14, True)))
     # AMOLED: drift the whole page by a few px over time (static text is the burn-in risk)
     t = int(time.time() // 120) % 4
     ox, oy = (0, 2, 2, 0)[t], (0, 0, 2, 2)[t]
@@ -100,13 +101,18 @@ def render(view, w, h, r, radius_mi=50, page=0):
         # line 2: type · altitude (climbing/descending) · speed ........ origin → destination
         vr = a.get("vrate_ms")
         trend = " ↑" if vr and vr > 1.5 else " ↓" if vr and vr < -1.5 else ""
-        parts = [p for p in (info.get("type", "")[:22], _alt(a) + trend,
-                             "%d kt" % round(a["speed_ms"] * 1.94384) if a.get("speed_ms") is not None else "") if p]
-        line2 = "  ·  ".join(parts)
-        rt = "%s → %s" % (orig.get("iata", "?"), dest.get("iata", "?")) if route else ""
+        sep = "  \u00b7  "
+        rt = "%s \u2192 %s" % (orig.get("iata", "?"), dest.get("iata", "?")) if route else ""
         rtw = d.textlength(rt, font=f_sub) if rt else 0
-        if rt: d.text((x1, y + 27 + oy), rt, font=f_sub, fill=DIM, anchor="ra")
-        d.text((x0, y + 27 + oy), _fit(d, line2, f_sub, x1 - x0 - rtw - 12), font=f_sub, fill=DIM, anchor="la")
+        room = x1 - x0 - rtw - (12 if rt else 0)
+        # altitude and speed always whole; the aircraft type takes what's left (or goes)
+        tail = sep.join(p for p in (_alt(a) + trend,
+                                    "%d kt" % round(a["speed_ms"] * 1.94384) if a.get("speed_ms") is not None else "") if p)
+        typ_room = room - d.textlength(sep + tail, font=f_sub)
+        typ = info.get("type", "")
+        line2 = (_fit(d, typ, f_sub, typ_room) + sep + tail) if typ and typ_room >= 60 else tail
+        if rt: d.text((x1, y + 27 + oy), rt, font=f_sub, fill=LINE2, anchor="ra")
+        d.text((x0, y + 27 + oy), _fit(d, line2, f_sub, room), font=f_sub, fill=LINE2, anchor="la")
         d.line((x0, y + row_h - 8 + oy, x1, y + row_h - 8 + oy), fill=(32, 37, 43))
         y += row_h
     return img
