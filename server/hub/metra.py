@@ -1,13 +1,13 @@
 """Metra app: one line drawn as a track between two chosen stations, with every train
 on that stretch placed where it is now, as a picture.
 
-  Chicago OTC ●──•──•──▶──•──•──◀──•──● Elburn
-                       │           │
-                West Chicago 2:46  │
-                             Geneva 2:51
+  Elburn ●──•──•──▶──•──•──◀──•──● Chicago OTC
+  ◀ 52   Kedzie  3:45        6 min late
+  ▶ 37   Winfield  3:39         on time
 
-The stations in between are dots; under each train, its next station and the time it
-gets there. Train number and delay sit above it, coloured by delay.
+Downtown is on the right, as on a map. The stations in between are dots; each train is
+an arrow with its number above, and one list below gives each train's next stop and
+arrival, coloured by delay (green, amber 3+ min late, red 10+).
 
 Data: the SB Metra Home Assistant integration (ha-sb-metra), through the hub's HA
 connection -- one source of truth, no Metra API use of our own:
@@ -178,23 +178,27 @@ def render(line, a, b, w, h, r, now=None):
                "Waiting for Metra data…" if not trips(line) else "No trains run %s → %s" % (a, b))
         d.text((w // 2, h // 2), _fit(d, msg, f_lab, w - 2 * side), font=f_lab, fill=SUB, anchor="mm")
         return img
+    # Chicago on the right, as on a map: draw the stretch downtown-end right
+    st = stations(line)
+    flip = p[0] in st and p[-1] in st and st.index(p[0]) < st.index(p[-1])
+    dp = p[::-1] if flip else p
     # track: ends named above it, every stop a dot
     x0, x1 = side + 8, w - side - 8
     y_end = top + int(48 * s)
-    y = y_end + int(84 * s)
+    y = y_end + int(86 * s)
     X = lambda i: x0 + (x1 - x0) * i / (len(p) - 1)
     room = x1 - x0 + 16 - 20                                 # both names on one row, shortest kept whole
-    wa, wb = d.textlength(p[0], font=f_end), d.textlength(p[-1], font=f_end)
+    wa, wb = d.textlength(dp[0], font=f_end), d.textlength(dp[-1], font=f_end)
     ra = room - min(wb, room / 2) if wa > wb else min(wa, room / 2) if wa + wb > room else wa
-    d.text((x0 - 8, y_end), _fit(d, p[0], f_end, ra), font=f_end, fill=INK, anchor="la")
-    d.text((x1 + 8, y_end), _fit(d, p[-1], f_end, room - min(wa, ra)), font=f_end, fill=INK, anchor="ra")
+    d.text((x0 - 8, y_end), _fit(d, dp[0], f_end, ra), font=f_end, fill=INK, anchor="la")
+    d.text((x1 + 8, y_end), _fit(d, dp[-1], f_end, room - min(wa, ra)), font=f_end, fill=INK, anchor="ra")
     lw = max(4, int(6 * s))
     d.line((x0, y, x1, y), fill=col, width=lw)
     for i in range(len(p)):
         rr = int((9 if i in (0, len(p) - 1) else 4) * s)
         d.ellipse((X(i) - rr, y - rr, X(i) + rr, y + rr), fill=col if i in (0, len(p) - 1) else (0, 0, 0),
                   outline=col, width=max(2, int(2 * s)))
-    trains = placed(line, p, now)
+    trains = sorted((((len(p) - 1 - f, -hd, t) if flip else (f, hd, t)) for f, hd, t in placed(line, p, now)), key=lambda x: x[0])
     live = {t["train"]: t for t in _active_trains(line)}
     on = {t["train"] for _, _, t in trains}
     # bottom: the next train to set off from each end toward the other
@@ -213,47 +217,41 @@ def render(line, a, b, w, h, r, now=None):
         rw = d.textlength(rhs, font=f_lab)
         d.text((w - side, ny), rhs, font=f_lab, fill=c, anchor="ra")
         d.text((side, ny), _fit(d, lhs, f_lab, w - 2 * side - rw - 12), font=f_lab, fill=DIM, anchor="la")
-    # labels below the track: next station + time, in as many rows as needed so none overlap
-    row_h, lab_top = int(28 * s), y + int(34 * s)
-    max_rows = max(1, (next_top - int(8 * s) - lab_top) // row_h)
-    rows_end, num_end, labs = [], [], []
+    # on the track: an arrow the way each train is going (a disc while it waits), its number above
+    num_end = []
     for fpos, head, t in trains:
-        x = X(fpos)
-        nm = "%s  %s" % (t["next_station"], _hm12(t["eta"]))
-        tw = d.textlength(nm, font=f_lab)
-        lx = max(side, min(w - side - tw, x - tw / 2))
-        row = next((i for i, e in enumerate(rows_end) if lx > e + 10), len(rows_end))
-        if row >= max_rows: continue
-        if row == len(rows_end): rows_end.append(0)
-        rows_end[row] = lx + tw
-        labs.append((x, lx, row, nm, t, head))
-    for x, lx, row, nm, t, head in labs:                   # leaders first, under everything
-        d.line((x, y + int(12 * s), x, lab_top + row * row_h - 2), fill=(70, 78, 88), width=1)
-    for x, lx, row, nm, t, head in labs:
-        ly = lab_top + row * row_h                         # black behind: hides leaders passing under
-        d.rectangle((lx - 4, ly - 2, lx + d.textlength(nm, font=f_lab) + 4, ly + row_h - 6), fill=(0, 0, 0))
-        d.text((lx, ly), nm, font=f_lab, fill=SUB, anchor="la")
-    for fpos, head, t in trains:
-        x = X(fpos)
-        # marker on the track: an arrow the way it's going (a disc while it waits)
-        c, m = _delay_col(t), int(11 * s)
+        x, c, m = X(fpos), _delay_col(t), int(11 * s)
         if head:
             d.polygon([(x + head * m, y), (x - head * m * 0.7, y - m), (x - head * m * 0.7, y + m)], fill=c, outline=(0, 0, 0))
         else:
             d.ellipse((x - m * 0.8, y - m * 0.8, x + m * 0.8, y + m * 0.8), fill=c, outline=(0, 0, 0))
-        # number + delay above, in rows so neighbours don't collide
-        tag = t["train"] + ("  +%d" % t["delay_min"] if (t.get("delay_min") or 0) >= 1 else "")
-        tw = d.textlength(tag, font=f_num)
+        tw = d.textlength(t["train"], font=f_num)
         nx = max(side, min(w - side - tw, x - tw / 2))
         nrow = next((i for i, e in enumerate(num_end) if nx > e + 8), len(num_end))
         if nrow >= 2: continue
         if nrow == len(num_end): num_end.append(0)
         num_end[nrow] = nx + tw
-        d.text((nx, y - int((18 + 24 * nrow) * s)), tag, font=f_num, fill=c, anchor="lb")
+        d.text((nx, y - int((16 + 22 * nrow) * s)), t["train"], font=f_num, fill=c, anchor="lb")
+    # one list under the track: number (delay colour), next stop + arrival, how late; soonest first
+    row_h, lab_top = int(28 * s), y + int(28 * s)
+    max_rows = max(1, (next_top - int(10 * s) - lab_top) // row_h)
+    lst = sorted(trains, key=lambda x: (_mins(x[2]["eta"]) - (now.hour * 60 + now.minute) + 720) % 1440)
+    if len(lst) > max_rows: lst = lst[:max_rows - 1]
+    numw = max([d.textlength("▶ " + t["train"], font=f_num) for _, _, t in trains] or [0])
+    for i, (fpos, head, t) in enumerate(lst):
+        ly, c = lab_top + i * row_h, _delay_col(t)
+        dl = t.get("delay_min") or 0
+        late = "%d min late" % dl if dl >= 1 else "on time"
+        lw_ = d.textlength(late, font=f_lab)
+        d.text((side, ly), ("▶ " if head > 0 else "◀ " if head < 0 else "● ") + t["train"], font=f_num, fill=c, anchor="la")
+        d.text((w - side, ly), late, font=f_lab, fill=c if dl >= 1 else DIM, anchor="ra")
+        nm = "%s  %s" % (t["next_station"], _hm12(t["eta"]))
+        d.text((side + numw + 14, ly), _fit(d, nm, f_lab, w - 2 * side - numw - lw_ - 28), font=f_lab, fill=SUB, anchor="la")
+    if len(lst) < len(trains):
+        d.text((side, lab_top + len(lst) * row_h), "+%d more" % (len(trains) - len(lst)), font=f_lab, fill=DIM, anchor="la")
     if not trains:
         d.text((w // 2, lab_top + row_h), "No trains between these stations now", font=f_lab, fill=DIM, anchor="mm")
-    hidden = len(trains) - len(labs)
-    foot = "%d train%s on this stretch" % (len(trains), "" if len(trains) == 1 else "s") + (" (%d not labelled)" % hidden if hidden else "")
+    foot = "%d train%s on this stretch" % (len(trains), "" if len(trains) == 1 else "s")
     d.text((w // 2 + ox, foot_y), foot, font=f_ft, fill=DIM, anchor="mb")
     return img
 

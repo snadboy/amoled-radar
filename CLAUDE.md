@@ -173,8 +173,8 @@ One server for every small display: weather radar today, aircraft next (ported f
   `/metra/<line>/line.jpg?w=&h=&r=&from=&to=`: a horizontal track between two stations,
   intermediate stops as dots, each train placed by interpolating its ETA to the next stop
   against the scheduled run time from its previous stop (arrow = direction, colour = delay:
-  green / amber >=3 / red >=10), train number + delay above, next station + time below
-  (staggered rows, leaders), "Next from <end>" for both ends at the bottom. Data only via HA
+  green / amber >=3 / red >=10), train number above; downtown end always drawn on the RIGHT (owner: map-like); one
+  list under the track, soonest first: arrow + number (delay colour), next stop + time, "N min late"; "Next from <end>" for both ends at the bottom. Data only via HA
   (ha-sb-metra): `sensor.metra_active_trains` attrs (cached 20 s) and the `metra.schedule`
   response action (cached per day) -- `ha.attributes()` / `ha.call()`. Station order per line
   = longest trip read outbound, other trips' stops slotted in (like gtfs.line_stops); the path
