@@ -232,7 +232,8 @@ def device(dev_id):
                      "types": [k for k in a.get("types", AIR_KINDS) if k in AIR_KINDS] or list(AIR_KINDS)},
         # Aircraft listing: the flights nearest an aircraft view's centre
         "airlist": {"view": d.get("airlist", {}).get("view") if d.get("airlist", {}).get("view") in av else view,
-                    "radius_mi": max(5, min(100, int(d.get("airlist", {}).get("radius_mi", 50))))},
+                    "radius_mi": max(5, min(100, int(d.get("airlist", {}).get("radius_mi", 50)))),
+                    "types": [k for k in d.get("airlist", {}).get("types", AIR_KINDS) if k in AIR_KINDS] or list(AIR_KINDS)},
         "screen": dict(default_screen(), **d.get("screen", {})),
         "profile": d.get("profile", {}),
     }

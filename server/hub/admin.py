@@ -165,7 +165,8 @@ def _preview(dev, apps):
     by_id = {a.ID: a for a in apps}
     if dev["start_app"] == "airlist":
         v = settings.air_view(dev["airlist"]["view"])
-        return by_id["airlist"].preview_png(v, int(w), int(hgt), int(r), dev["airlist"]["radius_mi"]) if v else None
+        return by_id["airlist"].preview_png(v, int(w), int(hgt), int(r), dev["airlist"]["radius_mi"],
+                                            set(dev["airlist"]["types"])) if v else None
     if dev["start_app"] == "aircraft":
         v = settings.air_view(dev["aircraft"]["view"])
         if not v: return None

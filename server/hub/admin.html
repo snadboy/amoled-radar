@@ -234,6 +234,8 @@ let selDev = null, devDirty = false;
 try { selDev = localStorage.getItem("dev"); } catch (e) {}
 const APP_NAMES = {weather: "Weather radar", aircraft: "Aircraft radar", airlist: "Aircraft listing"};
 const appName = a => APP_NAMES[a] || a;
+const KINDS = [["airline", "Airlines (incl. cargo)"], ["business", "Business jets (NetJets, Flexjet…)"],
+               ["private", "Private (N-numbers)"], ["other", "Other / no callsign"]];
 let appTab = "weather";                 // the app settings tab shown (kept across displays)
 
 function powerText(p) {
@@ -327,14 +329,15 @@ function renderEditor() {
         <div class="row"><div><label>View</label><select data-k="view">${S.views.map(v => `<option value="${v.id}" ${d.aircraft.view == v.id ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></div>
         <div><label>Starting zoom</label><select data-k="level">${levels.map((l, i) => `<option value="${i}" ${d.aircraft.start_level == i ? "selected" : ""}>${l} mi</option>`).join("")}</select></div></div>
         <label>Flight labels (callsign, altitude)</label><select data-k="labels">${[[0, "Never"], [5, "At 5 mi zoom or closer"], [10, "At 10 mi or closer"], [25, "At 25 mi or closer"], [50, "At 50 mi or closer"], [999, "Always"]].map(([v, t]) => `<option value="${v}" ${d.aircraft.labels_mi == v ? "selected" : ""}>${t}</option>`).join("")}</select>
-        <label>Show</label>${[["airline", "Airlines (incl. cargo)"], ["business", "Business jets (NetJets, Flexjet…)"], ["private", "Private (N-numbers)"], ["other", "Other / no callsign"]].map(([k, t]) => `<label class="inline"><input type="checkbox" data-kind="${k}" ${d.aircraft.types.includes(k) ? "checked" : ""}> ${t}</label>`).join("")}
+        <label>Show</label>${KINDS.map(([k, t]) => `<label class="inline"><input type="checkbox" data-kind="${k}" ${d.aircraft.types.includes(k) ? "checked" : ""}> ${t}</label>`).join("")}
         <label>Trails behind planes</label><select data-k="trail">${[[0, "Off"], [30, "30 s"], [60, "1 min"], [120, "2 min"], [240, "4 min"]].map(([v, t]) => `<option value="${v}" ${d.aircraft.trail_s == v ? "selected" : ""}>${t}</option>`).join("")}</select>
         <p class="hint">A tapped plane always shows its label, details and whole trail; tapping empty map flips labels until the next zoom.</p>
       </fieldset>
         <fieldset class="pane" data-pane="airlist" ${d.apps.includes("airlist") ? "" : "disabled"}>
         <div class="row"><div><label>Centre on</label><select data-k="alview">${S.views.map(v => `<option value="${v.id}" ${d.airlist.view == v.id ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></div>
         <div><label>Up to</label><select data-k="alradius">${[10, 25, 50, 75, 100].map(m => `<option value="${m}" ${d.airlist.radius_mi == m ? "selected" : ""}>${m} mi</option>`).join("")}</select></div></div>
-        <p class="hint">The nearest flights first, two lines each: flight, destination, distance and direction; type, altitude, speed and route. KEY or a tap shows the next page. Uses the same OpenSky polling as Aircraft radar (no extra credits for the same view).</p>
+        <label>Show</label>${KINDS.map(([k, t]) => `<label class="inline"><input type="checkbox" data-alkind="${k}" ${d.airlist.types.includes(k) ? "checked" : ""}> ${t}</label>`).join("")}
+        <p class="hint">The nearest flights that fit on one page, two lines each: flight, destination, distance and direction; type, altitude, speed and route. Refreshes every 5 s (KEY or a tap: now). Uses the same OpenSky polling as Aircraft radar (no extra credits for the same view).</p>
         </fieldset>
         <p class="hint offnote">Not enabled for this display -- tick it under Apps to use it.</p>
       </div>
@@ -402,7 +405,8 @@ async function saveDevice() {                     // true when saved
     apps: [...c.querySelectorAll("[data-app]")].filter(x => x.checked).map(x => x.dataset.app),
     start_app: q("[data-k=start_app]").value,
     weather: {places: [...c.querySelectorAll("[data-place]")].filter(x => x.checked).map(x => x.dataset.place), start: q("[data-k=wstart]").value, strip: q("[data-k=wstrip]").checked},
-    airlist: {view: q("[data-k=alview]").value, radius_mi: +q("[data-k=alradius]").value},
+    airlist: {view: q("[data-k=alview]").value, radius_mi: +q("[data-k=alradius]").value,
+              types: [...c.querySelectorAll("[data-alkind]")].filter(x => x.checked).map(x => x.dataset.alkind)},
     aircraft: {view: q("[data-k=view]").value, start_level: +q("[data-k=level]").value, labels_mi: +q("[data-k=labels]").value, trail_s: +q("[data-k=trail]").value,
               types: [...c.querySelectorAll("[data-kind]")].filter(x => x.checked).map(x => x.dataset.kind)},
     screen: Object.fromEntries([...c.querySelectorAll("[data-s]")].map(x => [x.dataset.s, x.value])),

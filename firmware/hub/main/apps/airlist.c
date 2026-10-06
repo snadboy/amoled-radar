@@ -2,7 +2,8 @@
 //
 // The hub draws the whole page (server/hub/airlist.py) from the same OpenSky data and
 // lookups as the Aircraft radar app; this fetches it every few seconds and puts it on
-// the panel. KEY or a tap shows the next page; 30 s later it is back on the first.
+// the panel. The hub's options (radius, flight types...) come as a ready-made query
+// string in the hello, appended as-is. KEY or a tap refreshes it now.
 //
 // Draws to the panel itself (like weather): LVGL is paused while it is active, and
 // leave() returns only once the draw task has stopped touching the panel.
@@ -26,11 +27,9 @@ static const char *TAG = "airlist";
 #define URL_MAX      256
 #define MAX_JPEG     (160 * 1024)
 #define REFRESH_MS   5000
-#define PAGE_IDLE_MS 30000
 
 static char s_view[16] = "home";
-static int s_mi = 50, s_page;
-static int64_t s_page_at;
+static char s_query[96] = "mi=50";        // from the hub, e.g. "mi=50&types=airline,private"
 static volatile bool s_active, s_screen_on = true, s_idle = true;
 static QueueHandle_t s_keys;
 static TaskHandle_t s_draw;
@@ -50,8 +49,8 @@ static bool tapped(void)                     // a new touch, not a held one
 static void draw_page(void)
 {
     char url[URL_MAX]; uint8_t *jpg; size_t len;
-    snprintf(url, sizeof(url), "%s/airlist/%s/list.jpg?w=%d&h=%d&r=%d&mi=%d&page=%d", hub_url(), s_view,
-             BOARD.w, BOARD.h, BOARD.corner_r, s_mi, s_page);
+    snprintf(url, sizeof(url), "%s/airlist/%s/list.jpg?w=%d&h=%d&r=%d&%s", hub_url(), s_view,
+             BOARD.w, BOARD.h, BOARD.corner_r, s_query);
     if (net_get(url, &jpg, &len, MAX_JPEG) != ESP_OK) return;   // keep the last page up
     if (running() && jpeg_draw(jpg, len, 0, 0, 256) == ESP_OK) hub_drawn();
     free(jpg);
@@ -67,13 +66,12 @@ static void draw_task(void *arg)
             continue;
         }
         if (s_idle) { s_idle = false; board_fill(0, 0, BOARD.w, BOARD.h, 0x0000); }
-        if (s_page && ms() - s_page_at > PAGE_IDLE_MS) s_page = 0;
         draw_page();
         int64_t until = ms() + REFRESH_MS;
         while (running() && ms() < until) {
             key_ev_t ev;
             bool key = xQueueReceive(s_keys, &ev, pdMS_TO_TICKS(40)) == pdTRUE && ev.btn == BTN_KEY && ev.type == KEY_SHORT;
-            if (key || tapped()) { s_page++; s_page_at = ms(); break; }    // the hub wraps the page number
+            if (key || tapped()) break;                                    // refresh now
         }
     }
 }
@@ -87,19 +85,20 @@ static void wait_idle(void)
 // ---------------------------------------------------------------- app interface
 static void app_init(const cJSON *views)
 {
-    const cJSON *v = cJSON_GetArrayItem(views, 0), *id = cJSON_GetObjectItem(v, "id"), *mi = cJSON_GetObjectItem(v, "radius_mi");
+    const cJSON *v = cJSON_GetArrayItem(views, 0), *id = cJSON_GetObjectItem(v, "id"), *qs = cJSON_GetObjectItem(v, "query"),
+                *mi = cJSON_GetObjectItem(v, "radius_mi");
     if (cJSON_IsString(id)) strlcpy(s_view, id->valuestring, sizeof(s_view));
-    if (cJSON_IsNumber(mi)) s_mi = mi->valueint;
+    if (cJSON_IsString(qs)) strlcpy(s_query, qs->valuestring, sizeof(s_query));
+    else if (cJSON_IsNumber(mi)) snprintf(s_query, sizeof(s_query), "mi=%d", mi->valueint);   // an older hub
     s_keys = xQueueCreate(8, sizeof(key_ev_t));
     xTaskCreate(draw_task, "airlist", 4096, NULL, 5, &s_draw);
-    ESP_LOGI(TAG, "view %s, %d mi", s_view, s_mi);
+    ESP_LOGI(TAG, "view %s, %s", s_view, s_query);
 }
 
 static void app_enter(void)
 {
     ui_pause(true);                       // LVGL hands the panel over
     xQueueReset(s_keys);
-    s_page = 0;
     s_active = true;
     xTaskNotifyGive(s_draw);
 }

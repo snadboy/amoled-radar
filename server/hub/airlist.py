@@ -8,7 +8,10 @@ watching either spends the same 1 credit per poll) and its cached type / route l
   B738 · 35,000 ft ↑ · 452 kt                     ORD → LAX
 
 Endpoints
-  /airlist/<view>/list.jpg?w=&h=&r=&panel=&mi=50&page=0   the list (page wraps)
+  /airlist/<view>/list.jpg?w=&h=&r=&mi=50&types=airline,private   one page, nearest first
+
+The device appends the "query" its hello gave it (radius, types...) as-is, so new
+listing options need no firmware change.
 """
 import io, math, time
 
@@ -23,8 +26,11 @@ DIRS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 DIM, INK, SUB, AMBER = (120, 130, 142), (236, 240, 244), (150, 160, 172), (255, 183, 3)
 LINE2 = (196, 204, 214)                  # second line: brighter than SUB (was too dim to read)
 
-def view_summary(view, radius_mi=50):
-    return {"id": view["id"], "name": view["name"], "lat": view["lat"], "lon": view["lon"], "radius_mi": radius_mi}
+def view_summary(view, radius_mi=50, types=lookup.KINDS):
+    q = "mi=%d" % radius_mi
+    if set(types) != set(lookup.KINDS): q += "&types=" + ",".join(types)
+    return {"id": view["id"], "name": view["name"], "lat": view["lat"], "lon": view["lon"],
+            "radius_mi": radius_mi, "query": q}
 
 def start(): pass
 
@@ -41,11 +47,13 @@ def _alt(a):
     ft = int(round(a["alt_m"] * 3.28084 / 100.0)) * 100
     return "FL%03d" % (ft // 100) if ft >= 18000 else "{:,} ft".format(ft)
 
-def rows(view, radius_mi):
-    """[(aircraft, miles, bearing, info)] within radius_mi of the view, nearest first."""
+def rows(view, radius_mi, kinds=None):
+    """[(aircraft, miles, bearing, info)] within radius_mi of the view, nearest first;
+    kinds: lookup.kind() classes to keep (None = all)."""
     snap = aircraft._poller(view).snapshot()
     out = []
     for a in snap["aircraft"]:
+        if kinds and lookup.kind(a["callsign"]) not in kinds: continue
         mi = opensky.miles_between(view["lat"], view["lon"], a["lat"], a["lon"])
         if mi <= radius_mi:
             info = lookup.lookup(a["icao"], a["callsign"], a["lat"], a["lon"], fetch=False) or {}
@@ -59,8 +67,8 @@ def _fit(d, text, font, room):
     while text and d.textlength(text + "…", font=font) > room: text = text[:-1]
     return text + "…"
 
-def render(view, w, h, r, radius_mi=50, page=0):
-    lst, snap = rows(view, radius_mi)
+def render(view, w, h, r, radius_mi=50, kinds=None):
+    lst, snap = rows(view, radius_mi, kinds)
     img = Image.new("RGB", (w, h), (0, 0, 0))
     d = ImageDraw.Draw(img)
     s = h / 480.0 if h >= w else w / 480.0                 # scale from the 480 px design
@@ -72,18 +80,16 @@ def render(view, w, h, r, radius_mi=50, page=0):
     side = max(14, int(r * 0.45))                          # clear of the rounded corners
     top, row_h = max(14, int(r * 0.5)) + 26, 58
     per = max(1, (h - top - 12) // row_h)
-    pages = max(1, (len(lst) + per - 1) // per)
-    page %= pages
     status = opensky.ST_NAMES.get(snap["status"], "?")
-    head = "%d within %d mi of %s" % (len(lst), radius_mi, view["name"])
-    if pages > 1: head += "  ·  %d/%d" % (page + 1, pages)
+    head = ("Nearest %d of %d within %d mi of %s" % (per, len(lst), radius_mi, view["name"]) if len(lst) > per
+            else "%d within %d mi of %s" % (len(lst), radius_mi, view["name"]))
     if snap["status"] not in (opensky.ST_OK, opensky.ST_IDLE): head += "  ·  " + status
     d.text((w // 2 + ox, top - 22 + oy), _fit(d, head, f_hd, w - 2 * side), font=f_hd, fill=DIM, anchor="mm")
     if not lst:
         msg = "Waiting for aircraft…" if snap["status"] == opensky.ST_IDLE else "No aircraft in range"
         d.text((w // 2, h // 2), msg, font=f_dest, fill=SUB, anchor="mm")
     y = top
-    for a, mi, brg, info in lst[page * per:(page + 1) * per]:
+    for a, mi, brg, info in lst[:per]:                       # one page: the nearest that fit
         x0, x1 = side + ox, w - side + ox
         route = info.get("route") or {}
         dest = route.get("dest") or {}
@@ -120,8 +126,8 @@ def render(view, w, h, r, radius_mi=50, page=0):
 def _jpeg(img):
     b = io.BytesIO(); img.save(b, "JPEG", quality=85); return b.getvalue()
 
-def preview_png(view, w, h, r, radius_mi=50):
-    b = io.BytesIO(); render(view, w, h, r, radius_mi).save(b, "PNG"); return b.getvalue()
+def preview_png(view, w, h, r, radius_mi=50, kinds=None):
+    b = io.BytesIO(); render(view, w, h, r, radius_mi, kinds).save(b, "PNG"); return b.getvalue()
 
 def handle(h, p, q):
     parts = p.split("/")                        # ['', 'airlist', <view>, 'list.jpg']
@@ -133,10 +139,10 @@ def handle(h, p, q):
     try:
         w, hh, r = int(q.get("w", 480)), int(q.get("h", 480)), int(q.get("r", 56))
         mi = max(5, min(MAX_MI, int(q.get("mi", 50))))
-        page = int(q.get("page", 0))
     except ValueError:
         return h.json({"error": "bad parameters"}, 400)
     if not (100 <= w <= 2048 and 100 <= hh <= 2048):
         return h.json({"error": "bad size"}, 400)
     aircraft._poller(view).touch()             # a device is watching: keep OpenSky polling
-    return h.send(_jpeg(render(view, w, hh, r, mi, page)), "image/jpeg")
+    kinds = set(q.get("types", "").split(",")) & set(lookup.KINDS)
+    return h.send(_jpeg(render(view, w, hh, r, mi, kinds or None)), "image/jpeg")
