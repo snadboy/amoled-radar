@@ -98,6 +98,9 @@ def hello_reply(dev, apps):
             out.append({"id": "aircraft", "views": [by_id["aircraft"].view_summary(v, dev["aircraft"]["start_level"],
                                                                                        dev["aircraft"]["labels_mi"], dev["aircraft"]["trail_s"],
                                                                                        dev["aircraft"]["types"])] if v else []})
+        elif app_id == "airlist" and "airlist" in by_id:
+            v = settings.air_view(dev["airlist"]["view"])
+            out.append({"id": "airlist", "views": [by_id["airlist"].view_summary(v, dev["airlist"]["radius_mi"])] if v else []})
     return {"id": dev["id"], "name": dev["name"], "default_app": dev["start_app"],
             "sv": settings.boot_version(dev), "apps": out}
 

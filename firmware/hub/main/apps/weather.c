@@ -459,7 +459,7 @@ static void app_show(const char *view)
 }
 
 const app_t APP_WEATHER = {
-    .id = "weather", .name = "Weather", .store_prefix = 'w', .raw = true,
+    .id = "weather", .name = "Weather radar", .store_prefix = 'w', .raw = true,
     .init = app_init, .enter = app_enter, .leave = app_leave, .key = app_key, .screen = app_screen,
     .current = app_current, .show = app_show,
 };

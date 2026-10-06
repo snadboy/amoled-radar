@@ -75,6 +75,16 @@
   .ed-top > div { flex: 1 1 280px; min-width: 0; }
   .ed-top > .preview { flex: 0 1 300px; min-width: 220px; margin-top: 0; }
   .ed-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 14px; align-items: start; }
+  .apptabs { margin: 2px 0 12px; }
+  .tabbar { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .tabbar button { background: none; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--dim);
+                   padding: 7px 14px; font: inherit; cursor: pointer; margin-bottom: -1px; }
+  .tabbar button.on { color: var(--ink); background: var(--panel); border-color: var(--line); border-bottom: 1px solid var(--panel); }
+  .tabbar button.off { opacity: .45; text-decoration: line-through; text-decoration-thickness: 1px; }
+  .apptabs .pane { border-top: 0; border-radius: 0 0 10px 10px; margin: 0; }
+  .apptabs .pane[disabled] { opacity: .45; }
+  .apptabs .offnote { margin: 6px 2px 0; }
+  .namerow { display: flex; gap: 8px; } .namerow input { flex: 1; } .namerow button { flex: none; }
   .editor .actions { position: sticky; bottom: 0; background: var(--panel); padding: 10px 0 2px; border-top: 1px solid var(--line); }
   @media (max-width: 860px) { .devwrap { grid-template-columns: 1fr; } .devlist { position: static; max-height: 240px; } }
   @media (max-width: 560px) { main { padding: 14px 16px 50px; } .grid { grid-template-columns: 1fr; } .row3 { grid-template-columns: 1fr 1fr; } }
@@ -152,9 +162,7 @@
 
 <dialog id="pdlg"><form method="dialog" onsubmit="return false">
   <h2 id="ptitle">Place</h2>
-  <label>Look up <span class="hint">a city, e.g. "Geneva, IL" -- fills in the name, position and time zone</span></label>
-  <input id="p_find" placeholder="City, state or country" autocomplete="off"><div class="finds" id="p_finds"></div>
-  <label>Name</label><input id="p_name">
+  <label>Name</label><div class="namerow"><input id="p_name"><button type="button" class="b" onclick="lookupPlace('p')">Look up…</button></div>
   <div class="row3"><div><label>Latitude</label><input id="p_lat"></div><div><label>Longitude</label><input id="p_lon"></div>
     <div><label>Time zone</label><input id="p_tz" placeholder="America/Chicago"></div></div>
   <label>Temperature and humidity</label>
@@ -176,13 +184,18 @@
 
 <dialog id="vdlg"><form method="dialog" onsubmit="return false">
   <h2 id="vtitle">Aircraft view</h2>
-  <label>Look up <span class="hint">a place to centre on (or type exact coordinates below)</span></label>
-  <input id="v_find" placeholder="City, state or country" autocomplete="off"><div class="finds" id="v_finds"></div>
-  <label>Name</label><input id="v_name">
+  <label>Name</label><div class="namerow"><input id="v_name"><button type="button" class="b" onclick="lookupPlace('v')">Look up…</button></div>
   <div class="row"><div><label>Latitude</label><input id="v_lat"></div><div><label>Longitude</label><input id="v_lon"></div></div>
   <label>Zoom levels <span class="hint">miles from centre to edge, widest first, e.g. 50, 25, 10</span></label><input id="v_levels">
   <div class="actions"><button class="b primary" onclick="saveView()">Save</button><button class="b" onclick="vdlg.close()">Cancel</button>
     <button class="b danger" id="v_del" onclick="delView()">Delete</button><span class="msg" id="v_msg"></span></div>
+</form></dialog>
+
+<dialog id="ldlg"><form method="dialog" onsubmit="return false">
+  <h2>Look up a place</h2>
+  <p class="meta">A city or town, e.g. "Geneva, IL". Picking one fills in the name, position and time zone.</p>
+  <input id="l_find" placeholder="City, state or country" autocomplete="off"><div class="finds" id="l_finds"></div>
+  <div class="actions"><button class="b" onclick="ldlg.close()">Cancel</button></div>
 </form></dialog>
 
 <dialog id="udlg"><form method="dialog">
@@ -219,7 +232,9 @@ function ago(t) { if (!t) return "never"; const s = Date.now() / 1000 - t; retur
 // guarded when picking another display and when leaving the page.
 let selDev = null, devDirty = false;
 try { selDev = localStorage.getItem("dev"); } catch (e) {}
-const appName = a => a == "weather" ? "Weather radar" : "Aircraft";
+const APP_NAMES = {weather: "Weather radar", aircraft: "Aircraft radar", airlist: "Aircraft listing"};
+const appName = a => APP_NAMES[a] || a;
+let appTab = "weather";                 // the app settings tab shown (kept across displays)
 
 function powerText(p) {
   if (p.batt == null || p.batt < 0) return p.usb ? "USB power, no battery" : "no battery";
@@ -229,7 +244,7 @@ function powerText(p) {
 function showing(d) {
   if (!d.online) return "offline · seen " + ago(d.last_seen);
   if (!d.showing || !d.showing.app) return "online";
-  const what = d.showing.app == "weather" ? "Weather · " + ((S.places.find(p => p.id == d.showing.view) || {}).name || d.showing.view) : "Aircraft";
+  const what = d.showing.app == "weather" ? "Weather · " + ((S.places.find(p => p.id == d.showing.view) || {}).name || d.showing.view) : appName(d.showing.app);
   return what + (d.showing.on ? "" : " · screen off");
 }
 
@@ -290,19 +305,6 @@ function renderEditor() {
         ${S.apps.map(a => `<label class="inline"><input type="checkbox" data-app="${a}" ${d.apps.includes(a) ? "checked" : ""}> ${appName(a)}</label>`).join("")}
         <label>Starts on</label><select data-k="start_app">${S.apps.map(a => `<option value="${a}" ${d.start_app == a ? "selected" : ""}>${appName(a)}</option>`).join("")}</select>
       </fieldset>
-      <fieldset><legend>Weather</legend>
-        ${S.places.map(p => `<label class="inline"><input type="checkbox" data-place="${p.id}" ${d.weather.places.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}
-        <label>Starts on</label><select data-k="wstart">${S.places.map(p => `<option value="${p.id}" ${d.weather.start == p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
-        <label class="inline"><input type="checkbox" data-k="wstrip" ${d.weather.strip ? "checked" : ""}> Status strip (temperature, city, time) under the radar</label>
-      </fieldset>
-      <fieldset><legend>Aircraft</legend>
-        <div class="row"><div><label>View</label><select data-k="view">${S.views.map(v => `<option value="${v.id}" ${d.aircraft.view == v.id ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></div>
-        <div><label>Starting zoom</label><select data-k="level">${levels.map((l, i) => `<option value="${i}" ${d.aircraft.start_level == i ? "selected" : ""}>${l} mi</option>`).join("")}</select></div></div>
-        <label>Flight labels (callsign, altitude)</label><select data-k="labels">${[[0, "Never"], [5, "At 5 mi zoom or closer"], [10, "At 10 mi or closer"], [25, "At 25 mi or closer"], [50, "At 50 mi or closer"], [999, "Always"]].map(([v, t]) => `<option value="${v}" ${d.aircraft.labels_mi == v ? "selected" : ""}>${t}</option>`).join("")}</select>
-        <label>Show</label>${[["airline", "Airlines (incl. cargo)"], ["business", "Business jets (NetJets, Flexjet…)"], ["private", "Private (N-numbers)"], ["other", "Other / no callsign"]].map(([k, t]) => `<label class="inline"><input type="checkbox" data-kind="${k}" ${d.aircraft.types.includes(k) ? "checked" : ""}> ${t}</label>`).join("")}
-        <label>Trails behind planes</label><select data-k="trail">${[[0, "Off"], [30, "30 s"], [60, "1 min"], [120, "2 min"], [240, "4 min"]].map(([v, t]) => `<option value="${v}" ${d.aircraft.trail_s == v ? "selected" : ""}>${t}</option>`).join("")}</select>
-        <p class="hint">A tapped plane always shows its label, details and whole trail; tapping empty map flips labels until the next zoom.</p>
-      </fieldset>
       <fieldset><legend>Screen (this room)</legend>
         <label>Mode</label><select data-s="mode">${["auto", "on", "off"].map(m => `<option value="${m}" ${d.screen.mode == m ? "selected" : ""}>${{auto: "Auto: follow the room's sensors", on: "Always on", off: "Off"}[m]}</option>`).join("")}</select>
         <label>Occupancy sensor</label><input data-s="occupancy" list="dl_binary" value="${esc(d.screen.occupancy)}">
@@ -314,9 +316,49 @@ function renderEditor() {
         <p class="hint">Brightness = min + lux × per-lux, capped at max (1–255). Screen and name changes apply within a few seconds; apps and starting points restart the display.</p>
       </fieldset>
     </div>
+      <div class="apptabs">
+        <div class="tabbar">${S.apps.map(a => `<button type="button" data-tab="${a}" class="${a == appTab ? "on" : ""} ${d.apps.includes(a) ? "" : "off"}">${appName(a)}</button>`).join("")}</div>
+        <fieldset class="pane" data-pane="weather" ${d.apps.includes("weather") ? "" : "disabled"}>
+        ${S.places.map(p => `<label class="inline"><input type="checkbox" data-place="${p.id}" ${d.weather.places.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}
+        <label>Starts on</label><select data-k="wstart">${S.places.map(p => `<option value="${p.id}" ${d.weather.start == p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
+        <label class="inline"><input type="checkbox" data-k="wstrip" ${d.weather.strip ? "checked" : ""}> Status strip (temperature, city, time) under the radar</label>
+      </fieldset>
+        <fieldset class="pane" data-pane="aircraft" ${d.apps.includes("aircraft") ? "" : "disabled"}>
+        <div class="row"><div><label>View</label><select data-k="view">${S.views.map(v => `<option value="${v.id}" ${d.aircraft.view == v.id ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></div>
+        <div><label>Starting zoom</label><select data-k="level">${levels.map((l, i) => `<option value="${i}" ${d.aircraft.start_level == i ? "selected" : ""}>${l} mi</option>`).join("")}</select></div></div>
+        <label>Flight labels (callsign, altitude)</label><select data-k="labels">${[[0, "Never"], [5, "At 5 mi zoom or closer"], [10, "At 10 mi or closer"], [25, "At 25 mi or closer"], [50, "At 50 mi or closer"], [999, "Always"]].map(([v, t]) => `<option value="${v}" ${d.aircraft.labels_mi == v ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <label>Show</label>${[["airline", "Airlines (incl. cargo)"], ["business", "Business jets (NetJets, Flexjet…)"], ["private", "Private (N-numbers)"], ["other", "Other / no callsign"]].map(([k, t]) => `<label class="inline"><input type="checkbox" data-kind="${k}" ${d.aircraft.types.includes(k) ? "checked" : ""}> ${t}</label>`).join("")}
+        <label>Trails behind planes</label><select data-k="trail">${[[0, "Off"], [30, "30 s"], [60, "1 min"], [120, "2 min"], [240, "4 min"]].map(([v, t]) => `<option value="${v}" ${d.aircraft.trail_s == v ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <p class="hint">A tapped plane always shows its label, details and whole trail; tapping empty map flips labels until the next zoom.</p>
+      </fieldset>
+        <fieldset class="pane" data-pane="airlist" ${d.apps.includes("airlist") ? "" : "disabled"}>
+        <div class="row"><div><label>Centre on</label><select data-k="alview">${S.views.map(v => `<option value="${v.id}" ${d.airlist.view == v.id ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></div>
+        <div><label>Up to</label><select data-k="alradius">${[10, 25, 50, 75, 100].map(m => `<option value="${m}" ${d.airlist.radius_mi == m ? "selected" : ""}>${m} mi</option>`).join("")}</select></div></div>
+        <p class="hint">The nearest flights first, two lines each: flight, destination, distance and direction; type, altitude, speed and route. KEY or a tap shows the next page. Uses the same OpenSky polling as Aircraft radar (no extra credits for the same view).</p>
+        </fieldset>
+        <p class="hint offnote">Not enabled for this display -- tick it under Apps to use it.</p>
+      </div>
     <div class="actions"><button class="b primary" id="ed_save">Save</button><button class="b" id="ed_revert">Discard changes</button>
       <button class="b danger" id="ed_forget">Forget</button><span class="msg" id="ed_msg"></span></div>`;
   c.oninput = c.onchange = markDirty;
+  // app tabs: pick one; an app that isn't ticked under Apps is greyed (and its fields disabled)
+  const showTab = t => {
+    appTab = t;
+    c.querySelectorAll(".tabbar button").forEach(b => b.classList.toggle("on", b.dataset.tab == t));
+    c.querySelectorAll(".pane").forEach(p => p.style.display = p.dataset.pane == t ? "" : "none");
+    const on = c.querySelector(`[data-app=${t}]`)?.checked;
+    c.querySelector(".offnote").style.display = on ? "none" : "";
+  };
+  const syncApps = () => {
+    c.querySelectorAll("[data-app]").forEach(x => {
+      c.querySelector(`.tabbar [data-tab=${x.dataset.app}]`).classList.toggle("off", !x.checked);
+      c.querySelector(`.pane[data-pane=${x.dataset.app}]`).disabled = !x.checked;
+    });
+    showTab(appTab);
+  };
+  c.querySelectorAll(".tabbar button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+  c.querySelectorAll("[data-app]").forEach(x => x.addEventListener("change", syncApps));
+  syncApps();
   c.querySelector("[data-k=view]").addEventListener("change", e => {            // zoom choices follow the view
     const lv = (S.views.find(v => v.id == e.target.value) || {}).levels || [];
     c.querySelector("[data-k=level]").innerHTML = lv.map((l, i) => `<option value="${i}">${l} mi</option>`).join("");
@@ -360,6 +402,7 @@ async function saveDevice() {                     // true when saved
     apps: [...c.querySelectorAll("[data-app]")].filter(x => x.checked).map(x => x.dataset.app),
     start_app: q("[data-k=start_app]").value,
     weather: {places: [...c.querySelectorAll("[data-place]")].filter(x => x.checked).map(x => x.dataset.place), start: q("[data-k=wstart]").value, strip: q("[data-k=wstrip]").checked},
+    airlist: {view: q("[data-k=alview]").value, radius_mi: +q("[data-k=alradius]").value},
     aircraft: {view: q("[data-k=view]").value, start_level: +q("[data-k=level]").value, labels_mi: +q("[data-k=labels]").value, trail_s: +q("[data-k=trail]").value,
               types: [...c.querySelectorAll("[data-kind]")].filter(x => x.checked).map(x => x.dataset.kind)},
     screen: Object.fromEntries([...c.querySelectorAll("[data-s]")].map(x => [x.dataset.s, x.value])),
@@ -397,7 +440,7 @@ function editPlace(id) {
   const p = S.places.find(x => x.id == id) || {temp: {source: "nws"}, places: [], tz: "America/Chicago"};
   editingPlace = id || null;
   $("ptitle").textContent = id ? "Edit " + p.name : "Add a place";
-  $("p_find").value = ""; $("p_finds").innerHTML = ""; $("p_del").style.display = id ? "" : "none";
+  $("p_del").style.display = id ? "" : "none";
   for (const [f, k] of [["p_name", "name"], ["p_lat", "lat"], ["p_lon", "lon"], ["p_tz", "tz"], ["p_radius", "radius_mi"], ["p_span", "lon_span"],
                         ["p_label", "status_label"], ["p_bz", "base_zoom"], ["p_rz", "radar_zoom"], ["p_rt", "radar_tile"]]) $(f).value = p[k] ?? "";
   document.querySelector(`input[name=p_src][value=${p.temp.source}]`).checked = true;
@@ -430,7 +473,7 @@ function editView(id) {
   const v = S.views.find(x => x.id == id) || {levels: [50, 25, 10]};
   editingView = id || null;
   $("vtitle").textContent = id ? "Edit " + v.name : "Add a view";
-  $("v_find").value = ""; $("v_finds").innerHTML = ""; $("v_del").style.display = id ? "" : "none";
+  $("v_del").style.display = id ? "" : "none";
   $("v_name").value = v.name || ""; $("v_lat").value = v.lat ?? ""; $("v_lon").value = v.lon ?? ""; $("v_levels").value = v.levels.join(", ");
   $("v_msg").textContent = ""; vdlg.showModal();
 }
@@ -500,8 +543,18 @@ $("p_suggest").onclick = async () => {
     $("p_smsg").textContent = t.length ? t.length + " towns -- edit freely" : "no towns found nearby";
   } catch (e) { $("p_smsg").className = "msg bad"; $("p_smsg").textContent = e.message; }
 };
-wireLookup("p_find", "p_finds", x => { $("p_name").value = x.name; $("p_lat").value = x.lat; $("p_lon").value = x.lon; if (x.tz) $("p_tz").value = x.tz; });
-wireLookup("v_find", "v_finds", x => { $("v_name").value = x.name; $("v_lat").value = x.lat; $("v_lon").value = x.lon; });
+// "Look up…" beside Name (place and aircraft-view dialogs): a small dialog of its own,
+// seeded with whatever name is typed; picking a match fills the fields and closes it.
+let lookupFill = null;
+wireLookup("l_find", "l_finds", x => { lookupFill && lookupFill(x); ldlg.close(); });
+function lookupPlace(pre) {
+  lookupFill = pre == "p"
+    ? x => { $("p_name").value = x.name; $("p_lat").value = x.lat; $("p_lon").value = x.lon; if (x.tz) $("p_tz").value = x.tz; }
+    : x => { $("v_name").value = x.name; $("v_lat").value = x.lat; $("v_lon").value = x.lon; };
+  $("l_find").value = $(pre + "_name").value.trim(); $("l_finds").innerHTML = "";
+  ldlg.showModal(); $("l_find").focus();
+  if ($("l_find").value.length >= 2) $("l_find").dispatchEvent(new Event("input"));
+}
 
 // ---- connections
 async function saveSecrets(keys) {

@@ -135,7 +135,7 @@ def _clean_device(d):
     if "apps" in d:
         out["apps"] = [a for a in d["apps"] if a in settings.APPS]
         if not out["apps"]: raise Bad("a device needs at least one app")
-    for k in ("start_app", "weather", "aircraft"):
+    for k in ("start_app", "weather", "aircraft", "airlist"):
         if k in d: out[k] = d[k]
     if "screen" in d:
         s = d["screen"]
@@ -163,6 +163,9 @@ def _preview(dev, apps):
     pr = dev.get("profile") or {}
     w, hgt, r, panel = pr.get("w", "480"), pr.get("h", "480"), pr.get("r", "56"), pr.get("panel", "amoled")
     by_id = {a.ID: a for a in apps}
+    if dev["start_app"] == "airlist":
+        v = settings.air_view(dev["airlist"]["view"])
+        return by_id["airlist"].preview_png(v, int(w), int(hgt), int(r), dev["airlist"]["radius_mi"]) if v else None
     if dev["start_app"] == "aircraft":
         v = settings.air_view(dev["aircraft"]["view"])
         if not v: return None

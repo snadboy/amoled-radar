@@ -11,11 +11,11 @@ and preview_png().
 import json, os, sys, threading, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import admin, aircraft, core, mqtt, weather
+from . import admin, aircraft, airlist, core, mqtt, weather
 
 PORT = int(os.environ.get("PORT", "8080"))
 ADMIN_PORT = int(os.environ.get("ADMIN_PORT", "8081"))
-APPS = [weather, aircraft]  # first is the default app
+APPS = [weather, aircraft, airlist]  # first is the default app
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True

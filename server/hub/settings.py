@@ -19,7 +19,7 @@ DB_PATH = os.path.join(CACHE, "hub.db")
 
 SECRET_KEYS = ("hass_url", "hass_token", "opensky_client_id", "opensky_client_secret",
                "mqtt_url", "mqtt_user", "mqtt_password")
-APPS = ("weather", "aircraft")               # in firmware order: BOOT steps through them
+APPS = ("weather", "aircraft", "airlist")    # in firmware order: BOOT steps through them
 
 # A room's screen policy, used for any device that doesn't set its own.
 DEFAULT_SCREEN = {
@@ -230,6 +230,9 @@ def device(dev_id):
                      "trail_s": int(a["trail_s"]) if str(a.get("trail_s", "")).isdigit() else small_trail,
                      # which flights to show (aircraft.lookup.kind): airline, business, private, other
                      "types": [k for k in a.get("types", AIR_KINDS) if k in AIR_KINDS] or list(AIR_KINDS)},
+        # Aircraft listing: the flights nearest an aircraft view's centre
+        "airlist": {"view": d.get("airlist", {}).get("view") if d.get("airlist", {}).get("view") in av else view,
+                    "radius_mi": max(5, min(100, int(d.get("airlist", {}).get("radius_mi", 50))))},
         "screen": dict(default_screen(), **d.get("screen", {})),
         "profile": d.get("profile", {}),
     }
@@ -244,7 +247,7 @@ def put_device(dev_id, changes):
     with _lock:
         d = _raw_device(dev_id)
         if d is None: raise KeyError(dev_id)
-        for k in ("name", "apps", "start_app", "weather", "aircraft", "screen"):
+        for k in ("name", "apps", "start_app", "weather", "aircraft", "airlist", "screen"):
             if k in changes: d[k] = changes[k]
         if not d.get("name"): d.pop("name", None)
         db = _conn(); db.execute("INSERT OR REPLACE INTO devices VALUES (?, ?)", (dev_id, json.dumps(d))); db.commit()
@@ -266,6 +269,7 @@ def boot_version(dev):
     the places / views it shows). When it changes, the device restarts to pick it up;
     screen policy and the name apply live and are left out."""
     used = {"apps": dev["apps"], "start_app": dev["start_app"], "weather": dev["weather"], "aircraft": dev["aircraft"],
+            "airlist": dev["airlist"], "airlist_view": air_view(dev["airlist"]["view"]),
             "places": [place(p) for p in dev["weather"]["places"]], "view": air_view(dev["aircraft"]["view"])}
     return zlib.crc32(json.dumps(used, sort_keys=True).encode()) & 0x7FFFFFFF
 
@@ -279,5 +283,6 @@ def places_in_use():
 def views_in_use():
     devs = devices()
     if not devs: return air_views()
-    want = {d["aircraft"]["view"] for d in devs if "aircraft" in d["apps"]}
+    want = {d["aircraft"]["view"] for d in devs if "aircraft" in d["apps"]} | \
+           {d["airlist"]["view"] for d in devs if "airlist" in d["apps"]}
     return [v for v in air_views() if v["id"] in want]
