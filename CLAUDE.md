@@ -169,6 +169,12 @@ One server for every small display: weather radar today, aircraft next (ported f
   firmware app name). Admin editor: app settings on tabs (`appTab`), an app not ticked
   under Apps -> tab struck through + `<fieldset disabled>`. Place / view dialogs: a
   "Look up..." button beside Name opens `#ldlg` (wireLookup on `l_find`).
+- **Remote Control server (2026-10-06):** `claude-rc@display-hub` (ops template: same-dir in this
+  repo, `--permission-mode default`, because sessions here deploy the hub and publish firmware)
+  runs on sdevs, so this repo is reachable from the Claude Android app / claude.ai/code -> Code
+  even with the PC off. Log `~/logs/claude-rc-display-hub.log`. Needed its own trust entry in
+  `~/.claude.json` and `git remote set-head origin -a` (see claude-config/systemd/README.md).
+  This file is what a fresh phone session reads first -- keep the status above current.
 - **Open items:** P4 3.5" board bring-up when it arrives (install page first; chip revision,
   rotation flags unverified); owner to rename the displays and delete the six Dockhand stack
   variables (hub.db has them now); rotate DOCKHAND_API_TOKEN (it was pasted into a chat).
