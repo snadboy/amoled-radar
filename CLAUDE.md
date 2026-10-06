@@ -134,6 +134,30 @@ One server for every small display: weather radar today, aircraft next (ported f
     pink 35), best 100 mi window by summed-area table; hysteresis KEEP 0.6, QUIET 300
     -> home + "No active storms"; centre snapped to 0.25 deg. Label pill in the frames +
     status strip. RainViewer ignores the colour-scheme parameter now (one palette).
+- **2026-10-05/06 (hub 75520d0, firmware 75520d0 on both C6):**
+  * Views show 10% beyond radius/range (`VIEW_MARGIN` 1.1 in weather/render.py and
+    aircraft/basemap.py) so the outer ring clears the bezel; strip-off progress bar lifted
+    6 px with times inset `r*0.6` from the rounded corners.
+  * NOAA QC mask: never on Active; `apply_mask` returns None (frame left unmasked) when it
+    would remove >25% of REAL rain -- opaque and not light cyan (b > 200, b > r), because
+    the clear-air rings round radar sites are opaque light cyan and are exactly what the
+    mask removes (counting them disabled QC for St. Louis).
+  * Busy loops: over budget -> 64 colours -> fewer real frames keeping the in-betweens ->
+    fewer in-betweens. Radar layer upscaled with NEAREST. Firmware caps a frame at 112 ms
+    (FRAME_MAX_MS) so a short loop plays at full-loop pace instead of stretching to 5 s.
+  * Battery: AXP2101 detection/ADC/fuel gauge enabled in pmu_init; `board_power()` read every
+    60 s, sent as `&batt=&bmv=&chg=&usb=` (batt -1 = none); admin page line + HA Battery /
+    Charging / Battery voltage (only if batt >= 0) and USB power entities. John's display
+    has a cell (100%, 4.08 V on first read -- gauge uncalibrated); Robert's has none.
+  * Admin preview: "Preview is being rendered..." placeholder + 10 s retries (a new profile
+    renders on first request; after a hub restart loops take minutes).
+  * Deploy gotchas: GitHub hosted runners once failed to start a job ("not acquired");
+    fallback = `docker build ./server` + push to ghcr with `gh auth token` (has
+    write:packages). Dockhand once reported "synced" without swapping the container:
+    redeploy and check `docker inspect` on bedrock.
+  * HA MQTT outage 2026-10-05 19:07: HA's own broker login rejected ("not authorised"),
+    every MQTT entity unavailable; a Mosquitto restart did NOT fix it -- HA had a pending
+    MQTT *reauth* flow that the owner completed in the UI (snadboy login).
 - **Open items:** P4 3.5" board bring-up when it arrives (install page first; chip revision,
   rotation flags unverified); owner to rename the displays and delete the six Dockhand stack
   variables (hub.db has them now); rotate DOCKHAND_API_TOKEN (it was pasted into a chat).
