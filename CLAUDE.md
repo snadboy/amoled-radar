@@ -158,6 +158,17 @@ One server for every small display: weather radar today, aircraft next (ported f
   * HA MQTT outage 2026-10-05 19:07: HA's own broker login rejected ("not authorised"),
     every MQTT entity unavailable; a Mosquitto restart did NOT fix it -- HA had a pending
     MQTT *reauth* flow that the owner completed in the UI (snadboy login).
+- **2026-10-06 (hub + firmware 92392fd):** third app **Aircraft listing** (`airlist`):
+  `server/hub/airlist.py` renders `/airlist/<view>/list.jpg?w=&h=&r=&mi=&page=` (nearest
+  first, two lines per flight, page wraps, drifts 2 px every 2 min for burn-in) from the
+  aircraft app's poller (`aircraft._poller(view)`, touched per request) and cached
+  `lookup.lookup(..., fetch=False)`; `firmware/hub/main/apps/airlist.c` is a raw app that
+  fetches it every 5 s (KEY/tap = next page, page 1 again after 30 s). Device settings
+  `airlist: {view, radius_mi}`; in `settings.APPS`, hello, boot_version, views_in_use.
+  "Aircraft" renamed "Aircraft radar" (admin APP_NAMES, mqtt APP_LABEL -> HA select option,
+  firmware app name). Admin editor: app settings on tabs (`appTab`), an app not ticked
+  under Apps -> tab struck through + `<fieldset disabled>`. Place / view dialogs: a
+  "Look up..." button beside Name opens `#ldlg` (wireLookup on `l_find`).
 - **Open items:** P4 3.5" board bring-up when it arrives (install page first; chip revision,
   rotation flags unverified); owner to rename the displays and delete the six Dockhand stack
   variables (hub.db has them now); rotate DOCKHAND_API_TOKEN (it was pasted into a chat).
