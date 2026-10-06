@@ -274,8 +274,13 @@ static void poll_state(void)
 {
     char url[URL_MAX]; uint8_t *js; size_t len;
     const app_t *a = s_cur >= 0 ? APPS[s_cur] : NULL;
-    snprintf(url, sizeof(url), "%s/device/%s/state?app=%s&view=%s&on=%d&bright=%d", hub_url(), s_id,
-             a ? a->id : "", a ? a->current() : "", s_on, s_applied_bright < 0 ? 0 : s_applied_bright);
+    // Power from the PMU, read every 60 s (an I2C read, shared with touch and PWR)
+    static board_power_t pw; static bool have_pw; static int64_t pw_at;
+    if (!pw_at || ms() - pw_at > 60000) { have_pw = board_power(&pw); pw_at = ms(); }
+    char power[48] = "";
+    if (have_pw) snprintf(power, sizeof(power), "&batt=%d&bmv=%d&chg=%d&usb=%d", pw.pct, pw.mv, pw.charging, pw.usb);
+    snprintf(url, sizeof(url), "%s/device/%s/state?app=%s&view=%s&on=%d&bright=%d%s", hub_url(), s_id,
+             a ? a->id : "", a ? a->current() : "", s_on, s_applied_bright < 0 ? 0 : s_applied_bright, power);
     if (net_get(url, &js, &len, 4096) != ESP_OK) return;
     cJSON *d = cJSON_Parse((char *)js);
     free(js);

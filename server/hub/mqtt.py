@@ -81,6 +81,16 @@ def _configs():
             entity_category="diagnostic", icon="mdi:chip")
         ent("sensor", node, "ip", dev, "IP address", state_topic=st, value_template="{{ value_json.ip }}",
             entity_category="diagnostic", icon="mdi:ip-network")
+        if core.seen(d["id"]).get("batt", -1) >= 0:         # only displays with a battery fitted
+            ent("sensor", node, "battery", dev, "Battery", state_topic=st, value_template="{{ value_json.battery }}",
+                device_class="battery", unit_of_measurement="%", state_class="measurement")
+            ent("binary_sensor", node, "charging", dev, "Charging", state_topic=st, device_class="battery_charging",
+                value_template="{{ 'ON' if value_json.charging else 'OFF' }}")
+            ent("sensor", node, "battery_voltage", dev, "Battery voltage", state_topic=st, device_class="voltage",
+                unit_of_measurement="V", value_template="{{ value_json.battery_v }}", entity_category="diagnostic")
+        if "usb" in core.seen(d["id"]):
+            ent("binary_sensor", node, "usb_power", dev, "USB power", state_topic=st, device_class="plug",
+                value_template="{{ 'ON' if value_json.usb else 'OFF' }}", entity_category="diagnostic")
         ent("button", node, "restart", dev, "Restart", command_topic="%s/%s/restart/press" % (BASE, node),
             device_class="restart", entity_category="config")
         ent("button", node, "identify", dev, "Identify", command_topic="%s/%s/identify/press" % (BASE, node),
@@ -118,7 +128,9 @@ def _device_state(d):
             "city": place["name"] if place else "",
             "pan": PAN.get((dx, dy), "%d mi E, %d mi N" % (dx * 50, dy * 50)), "screen": SCREEN.get(d["screen"].get("mode", "auto"), "Auto"),
             "brightness": s.get("bright"), "fw": d["profile"].get("fw", ""), "ip": s.get("ip", ""),
-            "screen_on": bool(s.get("on"))}
+            "screen_on": bool(s.get("on")),
+            "battery": s.get("batt") if s.get("batt", -1) >= 0 else None, "charging": bool(s.get("chg")),
+            "battery_v": round(s["bmv"] / 1000.0, 2) if s.get("bmv") else None, "usb": bool(s.get("usb"))}
 
 def _hub_state():
     by_id = {a.ID: a for a in _apps}

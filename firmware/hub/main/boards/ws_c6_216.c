@@ -55,6 +55,13 @@ const board_profile_t BOARD = {
 #define AXP_INTEN1        0x40    // IRQ enables 0x40..0x42, status 0x48..0x4A (write 1 to clear)
 #define AXP_INTSTS1       0x48
 #define AXP_PKEY_SHORT    0x08    // bit 3 of INTEN2 / INTSTS2
+#define AXP_STATUS1       0x00    // bit5 VBUS good, bit3 battery present
+#define AXP_STATUS2       0x01    // bits 6:5 battery current: 01 charging, 10 discharging
+#define AXP_GAUGE_CTRL    0x18    // bit3 fuel gauge enable
+#define AXP_ADC_EN        0x30    // bit0 battery voltage ADC
+#define AXP_VBAT_H        0x34    // 0x34/0x35: battery voltage, 14 bits, mV
+#define AXP_BAT_DET       0x68    // bit0 battery detection enable
+#define AXP_BAT_PCT       0xA4    // fuel-gauge state of charge, %
 #define CST9220_ADDR      0x5A
 
 static i2c_master_bus_handle_t s_i2c;
@@ -130,6 +137,11 @@ static esp_err_t pmu_init(void)
     // PWR: latch short presses only (a ~6 s hold still powers off in hardware).
     for (int i = 0; i < 3; i++) pmu_wr(AXP_INTEN1 + i, i == 1 ? AXP_PKEY_SHORT : 0);
     for (int i = 0; i < 3; i++) pmu_wr(AXP_INTSTS1 + i, 0xFF);
+    // Battery reporting: detection, the voltage ADC and the fuel gauge (all off by default).
+    uint8_t r = 0;
+    if (pmu_rd(AXP_BAT_DET, &r) == ESP_OK) pmu_wr(AXP_BAT_DET, r | 0x01);
+    if (pmu_rd(AXP_ADC_EN, &r) == ESP_OK) pmu_wr(AXP_ADC_EN, r | 0x01);
+    if (pmu_rd(AXP_GAUGE_CTRL, &r) == ESP_OK) pmu_wr(AXP_GAUGE_CTRL, r | 0x08);
     return ESP_OK;
 }
 
@@ -289,6 +301,20 @@ bool board_button_down(int btn)
     if (btn == BTN_BOOT) return gpio_get_level(PIN_BOOT) == 0;
     if (btn == BTN_KEY)  return gpio_get_level(PIN_KEY) == 0;
     return false;
+}
+
+bool board_power(board_power_t *p)
+{
+    uint8_t s1, s2, h, l, pct;
+    if (pmu_rd(AXP_STATUS1, &s1) != ESP_OK || pmu_rd(AXP_STATUS2, &s2) != ESP_OK) return false;
+    p->usb = s1 & 0x20;
+    p->charging = ((s2 >> 5) & 0x03) == 0x01;
+    p->pct = -1; p->mv = 0;
+    if (s1 & 0x08) {                                   // a battery is connected
+        if (pmu_rd(AXP_BAT_PCT, &pct) == ESP_OK && pct <= 100) p->pct = pct;
+        if (pmu_rd(AXP_VBAT_H, &h) == ESP_OK && pmu_rd(AXP_VBAT_H + 1, &l) == ESP_OK) p->mv = ((h & 0x3F) << 8) | l;
+    }
+    return true;
 }
 
 bool board_pwr_pressed(void)

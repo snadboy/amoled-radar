@@ -221,6 +221,11 @@ let selDev = null, devDirty = false;
 try { selDev = localStorage.getItem("dev"); } catch (e) {}
 const appName = a => a == "weather" ? "Weather radar" : "Aircraft";
 
+function powerText(p) {
+  if (p.batt == null || p.batt < 0) return p.usb ? "USB power, no battery" : "no battery";
+  return `battery ${p.batt}%` + (p.chg ? " (charging)" : p.usb ? " (on USB)" : "") + (p.bmv ? ` · ${(p.bmv / 1000).toFixed(2)} V` : "");
+}
+
 function showing(d) {
   if (!d.online) return "offline · seen " + ago(d.last_seen);
   if (!d.showing || !d.showing.app) return "online";
@@ -275,7 +280,7 @@ function renderEditor() {
     <div class="ed-top"><div>
       <h2>${esc(d.name)} <span class="badge ${d.online ? "ok" : "bad"}">${d.online ? "online" : "offline"}</span></h2>
       <div class="meta">${esc(pr.board || "?")} · ${esc(pr.w)}×${esc(pr.h)} ${esc(pr.panel || "")} · fw ${esc(pr.fw || "?")}<br>
-        ${esc(d.id)} · ${esc(d.ip || "–")} · seen ${ago(d.last_seen)}<br>now: ${esc(showing(d))}</div>
+        ${esc(d.id)} · ${esc(d.ip || "–")} · seen ${ago(d.last_seen)}<br>now: ${esc(showing(d))}${d.power ? " · " + esc(powerText(d.power)) : ""}</div>
       <label>Name</label><input data-k="name" value="${d.named ? esc(d.name) : ""}" placeholder="${esc(d.name)}">
     </div>
     <img class="preview" loading="lazy" alt="what it shows at start" src="api/devices/${encodeURIComponent(d.id)}/preview.png?t=${Date.now()}" onerror="previewRetry(this)">

@@ -153,7 +153,8 @@ def _state():
     for d in settings.devices():
         s = core.seen(d["id"])
         devs.append(dict(d, ip=s.get("ip"), last_seen=s.get("last_seen"), online=core.online(d["id"]),
-                         showing=dict(app=s.get("app"), view=s.get("view"), on=s.get("on"), bright=s.get("bright"))))
+                         showing=dict(app=s.get("app"), view=s.get("view"), on=s.get("on"), bright=s.get("bright")),
+                         power={k: s[k] for k in ("batt", "bmv", "chg", "usb") if k in s} or None))
     return {"secrets": settings.secrets_set(), "places": settings.places(), "views": settings.air_views(),
             "devices": devs, "apps": list(settings.APPS)}
 

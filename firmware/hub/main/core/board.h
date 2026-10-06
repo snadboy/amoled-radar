@@ -32,3 +32,7 @@ bool board_touch(int *x, int *y);           // true while touched, in panel coor
 enum { BTN_BOOT, BTN_KEY, BTN_PWR, BTN_COUNT };
 bool board_button_down(int btn);            // BOOT, KEY: current level
 bool board_pwr_pressed(void);               // PWR: a short press latched by the PMU since last call
+
+// Power, from the PMU where there is one. pct = -1: no battery connected (or no PMU).
+typedef struct { int pct, mv; bool charging, usb; } board_power_t;
+bool board_power(board_power_t *p);         // false: this board can't tell

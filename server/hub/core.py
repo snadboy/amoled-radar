@@ -42,8 +42,9 @@ def _touch(dev_id, ip, q=None):
         d.update(last_seen=int(time.time()), ip=ip)
         for k in ("app", "view"):
             if q and q.get(k): d[k] = q[k][:24]
-        for k in ("on", "bright"):
+        for k in ("on", "bright", "bmv", "chg", "usb"):
             if q and q.get(k, "").isdigit(): d[k] = int(q[k])
+        if q and q.get("batt", "").lstrip("-").isdigit(): d["batt"] = int(q["batt"])   # -1: no battery
 
 def online(dev_id):
     s = seen(dev_id)

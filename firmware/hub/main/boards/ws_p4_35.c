@@ -259,3 +259,5 @@ bool board_pwr_pressed(void)
     i2c_master_transmit(s_pmu, b, 2, 100);
     return true;
 }
+
+bool board_power(board_power_t *p) { return false; }     // no PMU on this board
