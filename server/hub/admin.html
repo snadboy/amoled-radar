@@ -232,7 +232,7 @@ function ago(t) { if (!t) return "never"; const s = Date.now() / 1000 - t; retur
 // guarded when picking another display and when leaving the page.
 let selDev = null, devDirty = false;
 try { selDev = localStorage.getItem("dev"); } catch (e) {}
-const APP_NAMES = {weather: "Weather radar", aircraft: "Aircraft radar", airlist: "Aircraft listing"};
+const APP_NAMES = {weather: "Weather radar", aircraft: "Aircraft radar", airlist: "Aircraft listing", metra: "Metra"};
 const appName = a => APP_NAMES[a] || a;
 const KINDS = [["airline", "Airlines (incl. cargo)"], ["business", "Business jets (NetJets, Flexjet…)"],
                ["private", "Private (N-numbers)"], ["other", "Other / no callsign"]];
@@ -339,6 +339,12 @@ function renderEditor() {
         <label>Show</label>${KINDS.map(([k, t]) => `<label class="inline"><input type="checkbox" data-alkind="${k}" ${d.airlist.types.includes(k) ? "checked" : ""}> ${t}</label>`).join("")}
         <p class="hint">The nearest flights that fit on one page, two lines each: flight, destination, distance and direction; type, altitude, speed and route. Refreshes every 5 s (KEY or a tap: now). Uses the same OpenSky polling as Aircraft radar (no extra credits for the same view).</p>
         </fieldset>
+        <fieldset class="pane" data-pane="metra" ${d.apps.includes("metra") ? "" : "disabled"}>
+        <label>Line</label><select data-k="mline"><option value="${esc(d.metra.line)}">${esc(d.metra.line)}</option></select>
+        <div class="row"><div><label>From</label><select data-k="mfrom"><option>${esc(d.metra.from)}</option></select></div>
+        <div><label>To</label><select data-k="mto"><option>${esc(d.metra.to)}</option></select></div></div>
+        <p class="hint">The line between these two stations: the stations in between as dots, each train where it is now with its next station and time beneath it, and the next train to leave each end. From Home Assistant's SB Metra integration; refreshes every 15 s.</p>
+        </fieldset>
         <p class="hint offnote">Not enabled for this display -- tick it under Apps to use it.</p>
       </div>
     <div class="actions"><button class="b primary" id="ed_save">Save</button><button class="b" id="ed_revert">Discard changes</button>
@@ -366,6 +372,7 @@ function renderEditor() {
     const lv = (S.views.find(v => v.id == e.target.value) || {}).levels || [];
     c.querySelector("[data-k=level]").innerHTML = lv.map((l, i) => `<option value="${i}">${l} mi</option>`).join("");
   });
+  metraPickers(c, d.metra);
   $("ed_save").onclick = () => saveDevice();
   $("ed_revert").onclick = () => { renderEditor(); renderDevList(); };
   $("ed_forget").onclick = async () => {
@@ -373,6 +380,25 @@ function renderEditor() {
     devDirty = false;
     S = await api("DELETE", "api/devices/" + encodeURIComponent(d.id)); selDev = null; render(); renderEditor();
   };
+}
+
+// Metra: lines from the hub, then that line's stations for From / To (kept when the
+// line changes and the station is on the new one too; else its two ends).
+async function metraPickers(c, m) {
+  const ln = c.querySelector("[data-k=mline]"), fr = c.querySelector("[data-k=mfrom]"), to = c.querySelector("[data-k=mto]");
+  const fill = async (line, want) => {
+    let r;
+    try { r = await api("GET", "api/metra?line=" + encodeURIComponent(line)); } catch (e) { return; }
+    if (!r.stations.length) return;
+    const opts = (sel, v) => sel.innerHTML = r.stations.map(s => `<option ${s == v ? "selected" : ""}>${esc(s)}</option>`).join("");
+    opts(fr, r.stations.includes(want.from) ? want.from : r.stations[0]);
+    opts(to, r.stations.includes(want.to) ? want.to : r.stations[r.stations.length - 1]);
+    return r;
+  };
+  const r = await fill(m.line, m);
+  if (!r) return;
+  ln.innerHTML = r.lines.map(l => `<option value="${esc(l.id)}" ${l.id == m.line ? "selected" : ""}>${esc(l.id)} · ${esc(l.name)}</option>`).join("");
+  ln.addEventListener("change", () => fill(ln.value, {from: fr.value, to: to.value}).then(markDirty));
 }
 
 // A preview the hub hasn't rendered yet (a new layout, e.g. strip turned off) fails at
@@ -409,6 +435,7 @@ async function saveDevice() {                     // true when saved
               types: [...c.querySelectorAll("[data-alkind]")].filter(x => x.checked).map(x => x.dataset.alkind)},
     aircraft: {view: q("[data-k=view]").value, start_level: +q("[data-k=level]").value, labels_mi: +q("[data-k=labels]").value, trail_s: +q("[data-k=trail]").value,
               types: [...c.querySelectorAll("[data-kind]")].filter(x => x.checked).map(x => x.dataset.kind)},
+    metra: {line: q("[data-k=mline]").value, from: q("[data-k=mfrom]").value, to: q("[data-k=mto]").value},
     screen: Object.fromEntries([...c.querySelectorAll("[data-s]")].map(x => [x.dataset.s, x.value])),
   };
   $("ed_save").disabled = true; msg.className = "msg"; msg.textContent = "saving…";

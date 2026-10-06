@@ -19,7 +19,7 @@ DB_PATH = os.path.join(CACHE, "hub.db")
 
 SECRET_KEYS = ("hass_url", "hass_token", "opensky_client_id", "opensky_client_secret",
                "mqtt_url", "mqtt_user", "mqtt_password")
-APPS = ("weather", "aircraft", "airlist")    # in firmware order: BOOT steps through them
+APPS = ("weather", "aircraft", "airlist", "metra")    # in firmware order: BOOT steps through them
 
 # A room's screen policy, used for any device that doesn't set its own.
 DEFAULT_SCREEN = {
@@ -234,6 +234,10 @@ def device(dev_id):
         "airlist": {"view": d.get("airlist", {}).get("view") if d.get("airlist", {}).get("view") in av else view,
                     "radius_mi": max(5, min(100, int(d.get("airlist", {}).get("radius_mi", 50)))),
                     "types": [k for k in d.get("airlist", {}).get("types", AIR_KINDS) if k in AIR_KINDS] or list(AIR_KINDS)},
+        # Metra: one line between two of its stations (names as ha-sb-metra gives them)
+        "metra": {"line": str(d.get("metra", {}).get("line") or "UP-W"),
+                  "from": str(d.get("metra", {}).get("from") or "Chicago OTC"),
+                  "to": str(d.get("metra", {}).get("to") or "Elburn")},
         "screen": dict(default_screen(), **d.get("screen", {})),
         "profile": d.get("profile", {}),
     }
@@ -248,7 +252,7 @@ def put_device(dev_id, changes):
     with _lock:
         d = _raw_device(dev_id)
         if d is None: raise KeyError(dev_id)
-        for k in ("name", "apps", "start_app", "weather", "aircraft", "airlist", "screen"):
+        for k in ("name", "apps", "start_app", "weather", "aircraft", "airlist", "metra", "screen"):
             if k in changes: d[k] = changes[k]
         if not d.get("name"): d.pop("name", None)
         db = _conn(); db.execute("INSERT OR REPLACE INTO devices VALUES (?, ?)", (dev_id, json.dumps(d))); db.commit()
@@ -270,7 +274,7 @@ def boot_version(dev):
     the places / views it shows). When it changes, the device restarts to pick it up;
     screen policy and the name apply live and are left out."""
     used = {"apps": dev["apps"], "start_app": dev["start_app"], "weather": dev["weather"], "aircraft": dev["aircraft"],
-            "airlist": dev["airlist"], "airlist_view": air_view(dev["airlist"]["view"]),
+            "airlist": dev["airlist"], "airlist_view": air_view(dev["airlist"]["view"]), "metra": dev["metra"],
             "places": [place(p) for p in dev["weather"]["places"]], "view": air_view(dev["aircraft"]["view"])}
     return zlib.crc32(json.dumps(used, sort_keys=True).encode()) & 0x7FFFFFFF
 

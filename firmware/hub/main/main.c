@@ -39,8 +39,8 @@
 
 static const char *TAG = "hub";
 
-extern const app_t APP_WEATHER, APP_AIRCRAFT, APP_AIRLIST;
-static const app_t *const APPS[] = { &APP_WEATHER, &APP_AIRCRAFT, &APP_AIRLIST };
+extern const app_t APP_WEATHER, APP_AIRCRAFT, APP_AIRLIST, APP_METRA;
+static const app_t *const APPS[] = { &APP_WEATHER, &APP_AIRCRAFT, &APP_AIRLIST, &APP_METRA };
 #define NAPPS ((int)(sizeof(APPS) / sizeof(APPS[0])))
 
 #define URL_MAX       256

@@ -10,6 +10,7 @@ access control; there is no separate login.
   POST   /api/secrets               {"hass_url": "...", ...}; null clears one; omitted = unchanged
   POST   /api/test/ha | opensky     try the connection
   GET    /api/ha/entities?domain=   entity ids for the pickers
+  GET    /api/metra?line=           Metra lines, and that line's stations in order
   POST   /api/places                create a place (its id is made from the name)
   PUT    /api/places/<id>           change a place                 DELETE removes it
   POST   /api/views, PUT|DELETE /api/views/<id>    the same for aircraft views
@@ -135,7 +136,7 @@ def _clean_device(d):
     if "apps" in d:
         out["apps"] = [a for a in d["apps"] if a in settings.APPS]
         if not out["apps"]: raise Bad("a device needs at least one app")
-    for k in ("start_app", "weather", "aircraft", "airlist"):
+    for k in ("start_app", "weather", "aircraft", "airlist", "metra"):
         if k in d: out[k] = d[k]
     if "screen" in d:
         s = d["screen"]
@@ -167,6 +168,8 @@ def _preview(dev, apps):
         v = settings.air_view(dev["airlist"]["view"])
         return by_id["airlist"].preview_png(v, int(w), int(hgt), int(r), dev["airlist"]["radius_mi"],
                                             set(dev["airlist"]["types"])) if v else None
+    if dev["start_app"] == "metra":
+        return by_id["metra"].preview_png(dev["metra"], int(w), int(hgt), int(r))
     if dev["start_app"] == "aircraft":
         v = settings.air_view(dev["aircraft"]["view"])
         if not v: return None
@@ -237,6 +240,10 @@ def handle(h, method, p, q, body, apps):
             if parts[0] == "places": settings.put_place(_clean_place(new_id, data))
             else: settings.put_view(_clean_view(new_id, data))
             return h.json(_state())
+        if method == "GET" and parts == ["metra"]:            # lines, and the chosen one's stations
+            from . import metra
+            line = q.get("line") or metra.DEFAULT_LINE
+            return h.json({"lines": metra.lines(), "stations": metra.stations(line)})
         if method == "GET" and parts == ["ha", "entities"]:
             return h.json(ha.entities(q.get("domain") or None))
         if len(parts) == 2 and parts[0] in ("places", "views"):

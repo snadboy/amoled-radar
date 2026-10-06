@@ -21,7 +21,7 @@ BASE = "display-hub"
 DISC = "homeassistant"
 STATUS = BASE + "/status"
 ADMIN_URL = "https://displays.swallow-spectrum.ts.net"
-APP_LABEL = {"weather": "Weather radar", "aircraft": "Aircraft radar", "airlist": "Aircraft listing"}
+APP_LABEL = {"weather": "Weather radar", "aircraft": "Aircraft radar", "airlist": "Aircraft listing", "metra": "Metra"}
 SCREEN = {"auto": "Auto", "on": "On", "off": "Off"}
 # Pan: the shown view moved one 50 mi step (the device's swipe); "<view>@<dx>,<dy>"
 PAN = {(0, 0): "Centred", (0, 1): "50 mi N", (1, 1): "50 mi NE", (1, 0): "50 mi E", (1, -1): "50 mi SE",

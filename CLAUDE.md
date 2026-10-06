@@ -169,6 +169,19 @@ One server for every small display: weather radar today, aircraft next (ported f
   firmware app name). Admin editor: app settings on tabs (`appTab`), an app not ticked
   under Apps -> tab struck through + `<fieldset disabled>`. Place / view dialogs: a
   "Look up..." button beside Name opens `#ldlg` (wireLookup on `l_find`).
+- **2026-10-06: fourth app Metra** (`metra`): `server/hub/metra.py` renders
+  `/metra/<line>/line.jpg?w=&h=&r=&from=&to=`: a horizontal track between two stations,
+  intermediate stops as dots, each train placed by interpolating its ETA to the next stop
+  against the scheduled run time from its previous stop (arrow = direction, colour = delay:
+  green / amber >=3 / red >=10), train number + delay above, next station + time below
+  (staggered rows, leaders), "Next from <end>" for both ends at the bottom. Data only via HA
+  (ha-sb-metra): `sensor.metra_active_trains` attrs (cached 20 s) and the `metra.schedule`
+  response action (cached per day) -- `ha.attributes()` / `ha.call()`. Station order per line
+  = longest trip read outbound, other trips' stops slotted in (like gtfs.line_stops); the path
+  between two stations = the fullest trip serving both (follows ME/RI branches). Device
+  settings `metra: {line, from, to}` (default UP-W Chicago OTC -> Elburn); admin tab with
+  Line / From / To dropdowns from `GET /api/metra?line=`. Firmware `apps/metra.c` = trimmed
+  airlist.c (fetch every 15 s; KEY/tap refresh). Ideas not built: tap a train for its stops.
 - **Remote Control server (2026-10-06):** `claude-rc@display-hub` (ops template: same-dir in this
   repo, `--permission-mode default`, because sessions here deploy the hub and publish firmware)
   runs on sdevs, so this repo is reachable from the Claude Android app / claude.ai/code -> Code

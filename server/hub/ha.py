@@ -13,6 +13,26 @@ def _get(path, timeout=10):
     r = urllib.request.Request(base + path, headers={"Authorization": "Bearer " + tok})
     return json.loads(urllib.request.urlopen(r, timeout=timeout).read())
 
+def _post(path, body, timeout=20):
+    base, tok = settings.secret("hass_url").rstrip("/"), settings.secret("hass_token")
+    r = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST",
+                               headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(r, timeout=timeout).read())
+
+def attributes(eid):
+    """An entity's attributes (uncached; callers keep their own copy), or None."""
+    if not (eid and configured()): return None
+    try: return _get("/api/states/" + eid).get("attributes")
+    except Exception as e:
+        print("    HA %s unavailable (%s)" % (eid, str(e)[:40])); return None
+
+def call(domain, service, data):
+    """A response action's answer (metra.schedule...), or None."""
+    if not configured(): return None
+    try: return _post("/api/services/%s/%s?return_response" % (domain, service), data).get("service_response")
+    except Exception as e:
+        print("    HA %s.%s failed (%s)" % (domain, service, str(e)[:60])); return None
+
 _cache, _clock = {}, threading.Lock()
 CACHE_S = 5                     # devices poll every few seconds; one HA read serves them all
 

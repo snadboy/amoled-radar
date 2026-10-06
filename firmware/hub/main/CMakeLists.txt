@@ -11,7 +11,7 @@ endif()
 idf_component_register(
     SRCS "main.c"
          "core/net.c" "core/store.c" "core/ota.c" "core/keys.c" "core/ui.c" "core/improv.c"
-         "apps/aircraft.c" "apps/airlist.c" "apps/weather.c" "apps/rdl.c"
+         "apps/aircraft.c" "apps/airlist.c" "apps/metra.c" "apps/weather.c" "apps/rdl.c"
          ${board_srcs}
     INCLUDE_DIRS "." "core"
     REQUIRES driver esp_driver_i2c esp_driver_spi esp_driver_gpio esp_lcd esp_timer

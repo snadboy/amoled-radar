@@ -101,6 +101,8 @@ def hello_reply(dev, apps):
         elif app_id == "airlist" and "airlist" in by_id:
             v = settings.air_view(dev["airlist"]["view"])
             out.append({"id": "airlist", "views": [by_id["airlist"].view_summary(v, dev["airlist"]["radius_mi"], dev["airlist"]["types"])] if v else []})
+        elif app_id == "metra" and "metra" in by_id:
+            out.append({"id": "metra", "views": [by_id["metra"].view_summary(dev["metra"])]})
     return {"id": dev["id"], "name": dev["name"], "default_app": dev["start_app"],
             "sv": settings.boot_version(dev), "apps": out}
 
